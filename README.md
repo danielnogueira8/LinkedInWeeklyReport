@@ -59,12 +59,13 @@ npm run db:migrate
 npm run dev
 ```
 
-| Command                              | What it does                                                                           |
-| ------------------------------------ | -------------------------------------------------------------------------------------- |
-| `npm test`                           | Unit tests (report maths and text format, LeadShark parsing, periods, encryption, PDF) |
-| `npm run lint` / `npm run typecheck` | ESLint and TypeScript                                                                  |
-| `npm run db:generate`                | New migration after changing `src/lib/db/schema.ts`                                    |
-| `npm run format`                     | Prettier                                                                               |
+| Command                                           | What it does                                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `npm test`                                        | Unit tests (report maths and text format, LeadShark parsing, periods, encryption, PDF)                   |
+| `npm run lint` / `npm run typecheck`              | ESLint and TypeScript                                                                                    |
+| `npm run db:generate`                             | New migration after changing `src/lib/db/schema.ts`                                                      |
+| `npm run format`                                  | Prettier                                                                                                 |
+| `node scripts/leadshark-probe.mjs <handle>=<key>` | Prints what LeadShark returns for a creator: every post in their feed, paging behaviour, photo endpoints |
 
 ## Deploying to Vercel + Neon
 
