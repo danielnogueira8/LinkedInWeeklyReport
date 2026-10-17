@@ -1,7 +1,7 @@
 import { ChevronRight, Plus, Users } from "lucide-react";
 import Link from "next/link";
 import { connection } from "next/server";
-import { Avatar } from "@/components/avatar";
+import { ClientAvatar } from "@/components/avatar";
 import { Sparkline } from "@/components/charts";
 import { compact, Delta } from "@/components/metrics";
 import { EmptyState, PageHeader } from "@/components/page-header";
@@ -72,10 +72,17 @@ export default async function ClientsPage() {
                     className={`${columns} group px-5 py-3.5 transition-colors hover:bg-zinc-50`}
                   >
                     <span className="flex min-w-0 items-center gap-3">
-                      <Avatar name={client.name} />
+                      <ClientAvatar name={client.name} creators={client.profiles} />
                       <span className="min-w-0">
-                        <span className="block truncate font-medium text-zinc-900">{client.name}</span>
-                        <span className="block truncate text-xs text-zinc-500">{handle(client.linkedinUrl)}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="truncate font-medium text-zinc-900">{client.name}</span>
+                          {client.profiles.length > 1 ? (
+                            <span className={`${pill} shrink-0 bg-brand-50 text-brand-700`}>Joint</span>
+                          ) : null}
+                        </span>
+                        <span className="block truncate text-xs text-zinc-500">
+                          {client.profiles.map((profile) => handle(profile.linkedinUrl)).join(" · ")}
+                        </span>
                       </span>
                     </span>
 

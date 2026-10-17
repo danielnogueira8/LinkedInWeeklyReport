@@ -3,16 +3,16 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteReport } from "@/app/actions";
-import { Avatar } from "@/components/avatar";
+import { Avatar, ClientAvatar } from "@/components/avatar";
 import { StatTile } from "@/components/metrics";
 import { PageHeader } from "@/components/page-header";
 import { ConfirmSubmit, CopyButton, HighlightsEditor, RegenerateButton } from "@/components/report-controls";
 import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getPreviousReport, getReportWithClient } from "@/lib/data";
 import { dayMonth, isCalendarWeek, isInProgress, shortRange, weekdayShort } from "@/lib/period";
-import { dmsOf, type ReportPost } from "@/lib/report/build";
+import { dmsOf, isJoint, type ReportData, type ReportPost } from "@/lib/report/build";
 import { change, metricValue, type Metric } from "@/lib/report/compare";
-import { formatNumber, highlightsFor, renderReportText, topPosts } from "@/lib/report/text";
+import { formatNumber, highlightsFor, plural, renderReportText, topPosts } from "@/lib/report/text";
 
 // "Refresh numbers" calls LeadShark from a Server Action on this page.
 export const maxDuration = 60;
@@ -57,6 +57,53 @@ function PostMetrics({ post }: { post: ReportPost }) {
   );
 }
 
+/** Joint reports: each creator's share of the week. */
+function CreatorBreakdown({ data }: { data: ReportData }) {
+  const total = data.totals.impressions;
+  return (
+    <section className={card}>
+      <div className={cardHeader}>
+        <h2 className={cardTitle}>By creator</h2>
+        <span className="text-xs text-zinc-400">Share of impressions</span>
+      </div>
+      <ul className="divide-y divide-zinc-100">
+        {data.creators!.map((creator) => {
+          const share = total > 0 ? creator.totals.impressions / total : 0;
+          const dms = creator.totals.firstDms + creator.totals.followUps;
+          return (
+            <li
+              key={creator.id}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 px-5 py-3.5 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_auto]"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <Avatar name={creator.name} />
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-zinc-900">{creator.name}</span>
+                  <span className="block text-xs text-zinc-500">{plural(creator.totals.posts, "post")}</span>
+                </span>
+              </span>
+              <span className="hidden items-center gap-3 sm:flex">
+                <span className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-100">
+                  <span className="block h-full rounded-full bg-brand-500" style={{ width: `${share * 100}%` }} />
+                </span>
+                <span className="w-9 text-right text-xs tabular-nums text-zinc-500">{Math.round(share * 100)}%</span>
+              </span>
+              <span className="text-right">
+                <span className="block text-sm font-medium tabular-nums text-zinc-900">
+                  {formatNumber(creator.totals.impressions)} <span className="font-normal text-zinc-400">impr.</span>
+                </span>
+                <span className="block text-xs text-zinc-500">
+                  {plural(creator.totals.comments, "comment")} · {plural(dms, "DM")}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export default async function ReportPage({ params }: PageProps<"/reports/[id]">) {
   const { id } = await params;
   await connection();
@@ -90,7 +137,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           { label: client.name, href: `/clients/${client.id}` },
           { label: title },
         ]}
-        leading={<Avatar name={client.name} size="lg" />}
+        leading={<ClientAvatar name={client.name} creators={data.creators ?? client.profiles} size="lg" />}
         title={title}
         description={
           <span className="flex flex-wrap items-center gap-2">
@@ -139,6 +186,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0 space-y-6">
+          {isJoint(data) ? <CreatorBreakdown data={data} /> : null}
           <section className={card}>
             <div className={cardHeader}>
               <h2 className={cardTitle}>Top posts</h2>
@@ -159,6 +207,12 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
                     </span>
                     <div className="min-w-0 flex-1 space-y-2">
                       <p className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                        {post.profileName ? (
+                          <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
+                            <Avatar name={post.profileName} size="sm" />
+                            {post.profileName} ·
+                          </span>
+                        ) : null}
                         {weekdayShort(new Date(post.postedAt), timezone)} {dayMonth(new Date(post.postedAt), timezone)}
                         {post.automationRunning ? (
                           <span className={`${pill} bg-good-bg text-good`}>Automation running</span>
@@ -216,6 +270,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
                           >
                             <span className="mr-2 text-xs text-zinc-400">
                               {weekdayShort(new Date(post.postedAt), timezone)}
+                              {post.profileName ? ` · ${post.profileName}` : ""}
                             </span>
                             {post.excerpt || post.url}
                           </a>

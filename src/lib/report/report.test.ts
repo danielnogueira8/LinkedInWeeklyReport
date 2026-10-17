@@ -204,6 +204,95 @@ describe("weekly report", () => {
     expect(defaultHighlights(noFollowUps)).toContain("- 12 DMs sent.");
   });
 
+  describe("joint report", () => {
+    const alex = { id: "p-alex", name: "Alex Olim" };
+    const sam = { id: "p-sam", name: "Sam Lee" };
+    const [autoTop, autoWed, autoThu] = automations;
+    const sources = [
+      { profile: alex, posts: posts.slice(0, 4), automations: [autoTop, autoWed] },
+      { profile: sam, posts: posts.slice(4), automations: [autoThu] },
+    ];
+    const joint = buildReportData({ period, timezone: "UTC", sources });
+
+    it("combines the totals and keeps each creator's share", () => {
+      expect(joint.totals).toEqual(data.totals);
+      expect(
+        joint.creators?.map((creator) => [creator.name, creator.totals.posts, creator.totals.impressions]),
+      ).toEqual([
+        ["Alex Olim", 4, 44306],
+        ["Sam Lee", 3, 2784],
+      ]);
+    });
+
+    it("renders a by-creator section and names who wrote each top post", () => {
+      const text = renderReportText({
+        clientName: "Alex Olim & Sam Lee",
+        period,
+        data: joint,
+        highlights: defaultHighlights(joint),
+      });
+      expect(text).toBe(
+        [
+          "Performance report · Alex Olim & Sam Lee",
+          "Tue 6 Oct to Tue 13 Oct 2026",
+          "",
+          "Impressions: 47,090",
+          "Reactions: 194",
+          "Comments: 416",
+          "Reposts: 9",
+          "DMs sent: 251 (198 first DMs + 53 follow-ups)",
+          "",
+          "By creator:",
+          "- Alex Olim: 4 posts · 44,306 impressions · 389 comments · 206 DMs",
+          "- Sam Lee: 3 posts · 2,784 impressions · 27 comments · 45 DMs",
+          "",
+          "Top 3 posts:",
+          "",
+          "1. Mon · Alex Olim · 35,814 impressions · 122 reactions · 367 comments · 136 DMs",
+          TOP_URL,
+          "",
+          "2. Tue · Alex Olim · 3,857 impressions · 20 reactions · 1 comment",
+          SECOND_URL,
+          "",
+          "3. Fri · Alex Olim · 3,435 impressions · 25 reactions · 1 comment",
+          THIRD_URL,
+          "",
+          "What worked best",
+          "Alex Olim's Monday post (#1) was the clear winner:",
+          "- 35,814 impressions, about 5x an average post this week",
+          "- 367 comments",
+          "- 136 DMs sent so far, and still going.",
+        ].join("\n"),
+      );
+    });
+
+    it("counts a post that shows up in both creators' feeds once", () => {
+      const overlapping = buildReportData({
+        period,
+        timezone: "UTC",
+        sources: [sources[0], { ...sources[1], posts: [...sources[1].posts, posts[0]] }],
+      });
+      expect(overlapping.totals).toEqual(joint.totals);
+    });
+
+    it("leaves solo reports unattributed", () => {
+      const solo = buildReportData({ period, timezone: "UTC", sources: [{ profile: alex, posts, automations }] });
+      expect(solo.creators).toBeUndefined();
+      expect(solo.posts.every((post) => post.profileName === undefined)).toBe(true);
+    });
+
+    it("renders a joint PDF", async () => {
+      const pdf = await renderReportPdf({
+        clientName: "Alex Olim & Sam Lee",
+        period,
+        data: joint,
+        highlights: defaultHighlights(joint),
+        generatedAt: new Date("2026-10-13T07:00:00Z"),
+      });
+      expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    });
+  });
+
   it("warns instead of silently reporting zeros when metrics can't be read", () => {
     const unreadable = [{ post_id: `urn:li:activity:${idAt("2026-10-07T10:00:00Z")}`, share_url: "", foo: 1 }].map(
       (raw) => normalizePost(raw)!,

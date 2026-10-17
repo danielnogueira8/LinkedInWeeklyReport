@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { clients, db, reports } from "@/lib/db";
+import { clients, db, profiles, reports } from "@/lib/db";
 import type { ReportTotals } from "@/lib/report/build";
 import { previousWeek, weeklySeries } from "@/lib/report/compare";
 
@@ -16,7 +16,10 @@ export async function listClientNames() {
 /** Clients with their recent calendar-week totals, for the overview table. */
 export async function listClientsOverview() {
   const [clientRows, reportRows] = await Promise.all([
-    db().select().from(clients).orderBy(asc(clients.name)),
+    db().query.clients.findMany({
+      orderBy: [asc(clients.name)],
+      with: { profiles: { orderBy: [asc(profiles.position)], columns: { id: true, name: true, linkedinUrl: true } } },
+    }),
     db()
       .select({
         id: reports.id,
@@ -40,7 +43,12 @@ export async function listClientsOverview() {
 
 export async function getClient(id: string) {
   if (!isUuid(id)) return null;
-  return (await db().query.clients.findFirst({ where: eq(clients.id, id) })) ?? null;
+  return (
+    (await db().query.clients.findFirst({
+      where: eq(clients.id, id),
+      with: { profiles: { orderBy: [asc(profiles.position)] } },
+    })) ?? null
+  );
 }
 
 export async function listReports(clientId: string) {
@@ -52,7 +60,12 @@ export async function listReports(clientId: string) {
 
 export async function getReportWithClient(id: string) {
   if (!isUuid(id)) return null;
-  return (await db().query.reports.findFirst({ where: eq(reports.id, id), with: { client: true } })) ?? null;
+  return (
+    (await db().query.reports.findFirst({
+      where: eq(reports.id, id),
+      with: { client: { with: { profiles: { orderBy: [asc(profiles.position)] } } } },
+    })) ?? null
+  );
 }
 
 /** The report covering the period that ends exactly where this one starts. */

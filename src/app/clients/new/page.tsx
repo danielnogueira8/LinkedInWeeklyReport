@@ -31,7 +31,7 @@ export default function NewClientPage() {
       <PageHeader
         crumbs={[{ label: "Clients", href: "/" }, { label: "Add client" }]}
         title="Add a client"
-        description="All you need is their name, LinkedIn profile and LeadShark API key."
+        description="Their name, LinkedIn profile and LeadShark API key. Add more creators to make it a joint report."
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className={`${card} p-6`}>

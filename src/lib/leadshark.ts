@@ -40,8 +40,10 @@ export class LeadSharkError extends Error {
   constructor(
     message: string,
     readonly status: number | null,
+    /** The creator whose key was in use, on joint reports. */
+    readonly creator?: string,
   ) {
-    super(message);
+    super(creator ? `${message} (${creator})` : message);
     this.name = "LeadSharkError";
   }
 

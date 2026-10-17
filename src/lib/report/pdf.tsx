@@ -1,7 +1,14 @@
 import { Document, Font, Link, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
 import { formatPeriod, type Period } from "@/lib/period";
-import type { ReportData } from "@/lib/report/build";
-import { formatNumber, parseHighlights, postStatsLine, topPosts, topPostsHeading } from "@/lib/report/text";
+import { isJoint, type ReportData } from "@/lib/report/build";
+import {
+  creatorStatsLine,
+  formatNumber,
+  parseHighlights,
+  postStatsLine,
+  topPosts,
+  topPostsHeading,
+} from "@/lib/report/text";
 
 // react-pdf hyphenates long words by default ("fol-low-ups"); wrap on whole words only.
 Font.registerHyphenationCallback((word) => [word]);
@@ -53,6 +60,15 @@ const styles = StyleSheet.create({
   bullet: { flexDirection: "row", marginBottom: 4, paddingLeft: 4 },
   bulletDot: { width: 12, color: colors.accent },
   bulletText: { flex: 1 },
+  creator: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  creatorName: { fontFamily: "Helvetica-Bold" },
+  creatorStats: { color: colors.muted },
   empty: { marginTop: 10, color: colors.muted },
   footer: {
     position: "absolute",
@@ -127,6 +143,18 @@ function ReportDocument({ clientName, period, data, highlights, agencyName, gene
               <Kpi label="Reposts" value={totals.reposts} />
               <Kpi label="DMs sent" value={totals.firstDms + totals.followUps} sub={dmBreakdown} />
             </View>
+
+            {isJoint(data) ? (
+              <View>
+                <Text style={styles.sectionTitle}>By creator</Text>
+                {data.creators!.map((creator) => (
+                  <View key={creator.id} style={styles.creator} wrap={false}>
+                    <Text style={styles.creatorName}>{pdfSafe(creator.name)}</Text>
+                    <Text style={styles.creatorStats}>{creatorStatsLine(creator.totals)}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             <Text style={styles.sectionTitle}>{topPostsHeading(top.length).replace(/:$/, "")}</Text>
             {top.map((post, index) => {

@@ -14,6 +14,9 @@ export type ReportPost = {
   firstDms: number;
   followUps: number;
   automationRunning: boolean;
+  /** Which creator posted it. Set on joint reports. */
+  profileId?: string;
+  profileName?: string;
 };
 
 export type ReportTotals = {
@@ -35,7 +38,20 @@ export type ReportData = {
   /** Posts we could not date, so they were left out. */
   undatedPosts: number;
   warnings: string[];
+  /** Per-creator totals. Present only on joint reports (two or more creators). */
+  creators?: Array<{ id: string; name: string; totals: ReportTotals }>;
 };
+
+/** One creator's raw LeadShark data. A solo report has one source, a joint report several. */
+export type ReportSource = {
+  profile?: { id: string; name: string };
+  posts: LeadSharkPost[];
+  automations: LeadSharkAutomation[];
+};
+
+export function isJoint(data: Pick<ReportData, "creators">) {
+  return (data.creators?.length ?? 0) > 1;
+}
 
 export function dmsOf(post: Pick<ReportPost, "firstDms" | "followUps">) {
   return post.firstDms + post.followUps;
@@ -57,19 +73,41 @@ function automationsFor(post: LeadSharkPost, automations: LeadSharkAutomation[])
   );
 }
 
-export function buildReportData(input: {
-  period: Period;
-  timezone: string;
-  posts: LeadSharkPost[];
-  automations: LeadSharkAutomation[];
-  warnings?: string[];
-}): ReportData {
-  const { period, posts, automations } = input;
-  const inPeriod = posts.filter((post) => post.postedAt && post.postedAt >= period.start && post.postedAt < period.end);
+function totalsOf(posts: ReportPost[]): ReportTotals {
+  const sum = (key: keyof Omit<ReportTotals, "posts">) => posts.reduce((total, post) => total + post[key], 0);
+  return {
+    posts: posts.length,
+    impressions: sum("impressions"),
+    reactions: sum("reactions"),
+    comments: sum("comments"),
+    reposts: sum("reposts"),
+    firstDms: sum("firstDms"),
+    followUps: sum("followUps"),
+  };
+}
+
+export function buildReportData(
+  input: { period: Period; timezone: string; warnings?: string[] } & (
+    | { sources: ReportSource[] }
+    | { posts: LeadSharkPost[]; automations: LeadSharkAutomation[] }
+  ),
+): ReportData {
+  const { period } = input;
+  const sources = "sources" in input ? input.sources : [{ posts: input.posts, automations: input.automations }];
+  const posts = sources.flatMap((source) => source.posts);
+
+  // A post can show up in two creators' feeds (e.g. a repost); count it once, for the first.
+  const seen = new Set<string>();
+  const inPeriod = sources.flatMap((source) =>
+    source.posts
+      .filter((post) => post.postedAt && post.postedAt >= period.start && post.postedAt < period.end)
+      .filter((post) => !seen.has(post.id) && seen.add(post.id))
+      .map((post) => ({ post, source })),
+  );
 
   const reportPosts: ReportPost[] = inPeriod
-    .map((post) => {
-      const matched = automationsFor(post, automations);
+    .map(({ post, source }) => {
+      const matched = automationsFor(post, source.automations);
       return {
         id: post.id,
         url: post.url,
@@ -82,34 +120,38 @@ export function buildReportData(input: {
         firstDms: matched.reduce((sum, a) => sum + a.firstDms, 0),
         followUps: matched.reduce((sum, a) => sum + a.followUps, 0),
         automationRunning: matched.some((a) => a.running),
+        ...(sources.length > 1 && source.profile
+          ? { profileId: source.profile.id, profileName: source.profile.name }
+          : {}),
       };
     })
     .sort((a, b) => b.impressions - a.impressions || b.comments - a.comments || b.postedAt.localeCompare(a.postedAt));
 
-  const sum = (key: keyof Omit<ReportTotals, "posts">) => reportPosts.reduce((total, post) => total + post[key], 0);
   const undatedPosts = posts.filter((post) => !post.postedAt).length;
   const warnings = [...(input.warnings ?? [])];
   if (undatedPosts > 0) warnings.push(`${undatedPosts} post(s) had no readable publish date and were left out.`);
-  const unreadable = inPeriod.find((post) => !post.hasEngagement);
-  if (unreadable && inPeriod.every((post) => !post.hasEngagement)) {
+  const unreadable = inPeriod.find(({ post }) => !post.hasEngagement)?.post;
+  if (unreadable && inPeriod.every(({ post }) => !post.hasEngagement)) {
     warnings.push(
       `LeadShark sent these posts without engagement numbers this app recognises, so impressions, reactions, comments and reposts show as 0. Fields it sent: ${unreadable.fieldNames?.join(", ") || "none"}.`,
     );
   }
 
+  const creators =
+    sources.length > 1
+      ? sources.flatMap(({ profile }) =>
+          profile
+            ? [{ ...profile, totals: totalsOf(reportPosts.filter((post) => post.profileId === profile.id)) }]
+            : [],
+        )
+      : undefined;
+
   return {
     timezone: input.timezone,
-    totals: {
-      posts: reportPosts.length,
-      impressions: sum("impressions"),
-      reactions: sum("reactions"),
-      comments: sum("comments"),
-      reposts: sum("reposts"),
-      firstDms: sum("firstDms"),
-      followUps: sum("followUps"),
-    },
+    totals: totalsOf(reportPosts),
     posts: reportPosts,
     undatedPosts,
     warnings,
+    ...(creators ? { creators } : {}),
   };
 }

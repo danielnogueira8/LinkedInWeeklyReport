@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteClient } from "@/app/actions";
-import { Avatar } from "@/components/avatar";
+import { ClientAvatar } from "@/components/avatar";
 import { WeeklyBars } from "@/components/charts";
 import { ClientForm } from "@/components/client-form";
 import { compact, Delta, StatTile } from "@/components/metrics";
@@ -41,6 +41,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
   const client = await getClient(id);
   if (!client) notFound();
 
+  const joint = client.profiles.length > 1;
   const reports = (await listReports(client.id)).map((report) => ({
     ...report,
     timezone: report.data.timezone,
@@ -62,23 +63,33 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
     <>
       <PageHeader
         crumbs={[{ label: "Clients", href: "/" }, { label: client.name }]}
-        leading={<Avatar name={client.name} size="lg" />}
+        leading={<ClientAvatar name={client.name} creators={client.profiles} size="lg" />}
         title={client.name}
         description={
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <a
-              href={client.linkedinUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 hover:text-zinc-900"
-            >
-              {client.linkedinUrl.replace(/^https:\/\/www\./, "")}
-              <ExternalLink className="size-3" aria-hidden />
-            </a>
-            <span className="inline-flex items-center gap-1">
-              <KeyRound className="size-3" aria-hidden />
-              LeadShark key ••••{client.apiKeyLast4}
-            </span>
+          <span className="mt-1 flex flex-col gap-1">
+            {joint ? (
+              <span className={`${pill} w-fit bg-brand-50 text-brand-700`}>
+                Joint report · {client.profiles.length} creators
+              </span>
+            ) : null}
+            {client.profiles.map((profile) => (
+              <span key={profile.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {joint ? <span className="font-medium text-zinc-700">{profile.name}</span> : null}
+                <a
+                  href={profile.linkedinUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 hover:text-zinc-900"
+                >
+                  {profile.linkedinUrl.replace(/^https:\/\/www\./, "")}
+                  <ExternalLink className="size-3" aria-hidden />
+                </a>
+                <span className="inline-flex items-center gap-1">
+                  <KeyRound className="size-3" aria-hidden />
+                  ••••{profile.apiKeyLast4}
+                </span>
+              </span>
+            ))}
           </span>
         }
         actions={
@@ -229,14 +240,20 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
               client={{
                 id: client.id,
                 name: client.name,
-                linkedinUrl: client.linkedinUrl,
-                apiKeyLast4: client.apiKeyLast4,
+                profiles: client.profiles.map(({ id, name, linkedinUrl, apiKeyLast4 }) => ({
+                  id,
+                  name,
+                  linkedinUrl,
+                  apiKeyLast4,
+                })),
               }}
             />
           </div>
           <div className="md:border-l md:border-zinc-100 md:pl-8">
             <h3 className="text-sm font-semibold text-zinc-900">Remove client</h3>
-            <p className="mb-4 mt-1 text-sm text-zinc-500">Deletes the client, their key and all their reports.</p>
+            <p className="mb-4 mt-1 text-sm text-zinc-500">
+              Deletes the client, their {joint ? "keys" : "key"} and all their reports.
+            </p>
             <ConfirmSubmit
               action={deleteClient.bind(null, client.id)}
               label="Delete client"

@@ -1,19 +1,19 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { encrypt, ENCRYPTION_KEY_MISSING, encryptionReady } from "@/lib/crypto";
 import { getClient, getReportWithClient } from "@/lib/data";
-import { clients, db, reports, type Client } from "@/lib/db";
+import { clients, db, profiles, reports, type ClientWithProfiles } from "@/lib/db";
 import { LeadSharkError, verifyApiKey } from "@/lib/leadshark";
 import { normalizeProfileUrl } from "@/lib/linkedin";
 import { lastFullWeek, resolvePeriod, type Period } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
 import { defaultHighlights } from "@/lib/report/text";
 
-// `fields` echoes the submitted values back: React resets a form after its
-// action runs, so inputs use these as defaults to survive a failed submit.
+// `fields` echoes submitted values back for forms with uncontrolled inputs: React
+// resets a form after its action runs, so inputs use these as defaults.
 export type FormState = { error?: string; message?: string; fields?: Record<string, string> } | undefined;
 
 function field(formData: FormData, name: string) {
@@ -21,44 +21,85 @@ function field(formData: FormData, name: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function all(formData: FormData, name: string) {
+  return formData.getAll(name).map((value) => (typeof value === "string" ? value.trim() : ""));
+}
+
 function describe(err: unknown) {
   if (err instanceof LeadSharkError) {
-    return err.isAuthError ? "LeadShark rejected this API key. Copy it again from LeadShark's settings." : err.message;
+    if (!err.isAuthError) return err.message;
+    return `LeadShark rejected ${err.creator ? `${err.creator}'s` : "this"} API key. Copy it again from LeadShark's settings.`;
   }
   if (err instanceof Error && err.message === ENCRYPTION_KEY_MISSING) return err.message;
   console.error(err);
   return "Something went wrong. Check the server logs for details.";
 }
 
-function readClientForm(formData: FormData, { requireKey }: { requireKey: boolean }) {
-  const fields = {
-    name: field(formData, "name"),
-    linkedinUrl: field(formData, "linkedinUrl"),
-    apiKey: field(formData, "apiKey"),
-  };
-  const linkedinUrl = normalizeProfileUrl(fields.linkedinUrl);
-  const invalid = (error: string) => ({ ok: false, state: { error, fields } }) as const;
-
-  if (!fields.name) return invalid("Add the client's name.");
-  if (!linkedinUrl) return invalid("Use a LinkedIn profile URL, like https://www.linkedin.com/in/alex-olim");
-  if (requireKey && !fields.apiKey) return invalid("Paste the client's LeadShark API key.");
-  return { ok: true, name: fields.name, linkedinUrl, apiKey: fields.apiKey, fields } as const;
+/** "Alex & Sam", "Alex, Sam & Jo" */
+function joinNames(names: string[]) {
+  return names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} & ${names.at(-1)}`;
 }
 
-async function checkKey(apiKey: string, fields: Record<string, string>): Promise<FormState> {
-  if (!encryptionReady()) return { error: ENCRYPTION_KEY_MISSING, fields };
-  try {
-    await verifyApiKey(apiKey);
-  } catch (err) {
-    return { error: describe(err), fields: { ...fields, apiKey: "" } };
+type CreatorInput = { id: string; name: string; linkedinUrl: string; apiKey: string };
+
+/**
+ * The client form posts one row per creator (creatorId/creatorName/creatorUrl/creatorKey,
+ * in order). One row is a solo report titled with the creator's name; two or more are
+ * a joint report with an optional title.
+ */
+function readClientForm(formData: FormData, existingIds: Set<string>) {
+  const ids = all(formData, "creatorId");
+  const names = all(formData, "creatorName");
+  const urls = all(formData, "creatorUrl");
+  const keys = all(formData, "creatorKey");
+  const joint = ids.length > 1;
+  const fail = (error: string) => ({ ok: false, error }) as const;
+
+  if (ids.length === 0) return fail("Add at least one creator.");
+  const creators: CreatorInput[] = [];
+  for (const [index, id] of ids.entries()) {
+    const label = joint ? `Creator ${index + 1}: ` : "";
+    const linkedinUrl = normalizeProfileUrl(urls[index] ?? "");
+    const apiKey = keys[index] ?? "";
+    if (id && !existingIds.has(id)) return fail("That creator no longer exists. Reload the page and try again.");
+    if (!names[index]) return fail(joint ? `${label}add their name.` : "Add the client's name.");
+    if (!linkedinUrl) return fail(`${label}use a LinkedIn profile URL, like https://www.linkedin.com/in/alex-olim`);
+    if (!apiKey && !id) return fail(`${label}paste their LeadShark API key.`);
+    if (creators.some((creator) => creator.linkedinUrl === linkedinUrl)) {
+      return fail("The same LinkedIn profile is in there twice.");
+    }
+    creators.push({ id, name: names[index], linkedinUrl, apiKey });
   }
+
+  const title = joint
+    ? field(formData, "title") || joinNames(creators.map((creator) => creator.name))
+    : creators[0].name;
+  return { ok: true, title, creators } as const;
+}
+
+/** Checks every newly pasted key with LeadShark; the error names the creator it belongs to. */
+async function checkKeys(creators: CreatorInput[]): Promise<string | null> {
+  if (creators.some((creator) => creator.apiKey) && !encryptionReady()) return ENCRYPTION_KEY_MISSING;
+  const results = await Promise.all(
+    creators.map(async (creator) => {
+      if (!creator.apiKey) return null;
+      try {
+        await verifyApiKey(creator.apiKey);
+        return null;
+      } catch (err) {
+        const message = describe(err);
+        return creators.length > 1 ? `${creator.name}: ${message}` : message;
+      }
+    }),
+  );
+  return results.find(Boolean) ?? null;
 }
 
 function keyColumns(apiKey: string) {
   return { apiKeyEncrypted: encrypt(apiKey), apiKeyLast4: apiKey.slice(-4) };
 }
 
-async function tryGenerate(client: Client, period: Period) {
+async function tryGenerate(client: ClientWithProfiles, period: Period) {
   try {
     return { report: await generateReport(client, period) };
   } catch (err) {
@@ -67,15 +108,27 @@ async function tryGenerate(client: Client, period: Period) {
 }
 
 export async function createClient(_prev: FormState, formData: FormData): Promise<FormState> {
-  const input = readClientForm(formData, { requireKey: true });
-  if (!input.ok) return input.state;
-  const rejected = await checkKey(input.apiKey, input.fields);
-  if (rejected) return rejected;
+  const input = readClientForm(formData, new Set());
+  if (!input.ok) return { error: input.error };
+  const rejected = await checkKeys(input.creators);
+  if (rejected) return { error: rejected };
 
-  const [client] = await db()
-    .insert(clients)
-    .values({ name: input.name, linkedinUrl: input.linkedinUrl, ...keyColumns(input.apiKey) })
-    .returning();
+  const client = await db().transaction(async (tx) => {
+    const [created] = await tx.insert(clients).values({ name: input.title }).returning();
+    const createdProfiles = await tx
+      .insert(profiles)
+      .values(
+        input.creators.map((creator, position) => ({
+          clientId: created.id,
+          name: creator.name,
+          linkedinUrl: creator.linkedinUrl,
+          position,
+          ...keyColumns(creator.apiKey),
+        })),
+      )
+      .returning();
+    return { ...created, profiles: createdProfiles };
+  });
 
   // Start them off with last week's report. A failure here shouldn't block adding the client.
   await tryGenerate(client, lastFullWeek());
@@ -83,22 +136,36 @@ export async function createClient(_prev: FormState, formData: FormData): Promis
 }
 
 export async function updateClient(clientId: string, _prev: FormState, formData: FormData): Promise<FormState> {
-  const input = readClientForm(formData, { requireKey: false });
-  if (!input.ok) return input.state;
-  if (input.apiKey) {
-    const rejected = await checkKey(input.apiKey, input.fields);
-    if (rejected) return rejected;
-  }
+  const existing = await getClient(clientId);
+  if (!existing) return { error: "This client no longer exists." };
+  const input = readClientForm(formData, new Set(existing.profiles.map((profile) => profile.id)));
+  if (!input.ok) return { error: input.error };
+  const rejected = await checkKeys(input.creators);
+  if (rejected) return { error: rejected };
 
-  await db()
-    .update(clients)
-    .set({
-      name: input.name,
-      linkedinUrl: input.linkedinUrl,
-      ...(input.apiKey ? keyColumns(input.apiKey) : {}),
-      updatedAt: new Date(),
-    })
-    .where(eq(clients.id, clientId));
+  const keptIds = input.creators.map((creator) => creator.id).filter(Boolean);
+  await db().transaction(async (tx) => {
+    await tx.update(clients).set({ name: input.title, updatedAt: new Date() }).where(eq(clients.id, clientId));
+    await tx
+      .delete(profiles)
+      .where(
+        keptIds.length
+          ? and(eq(profiles.clientId, clientId), notInArray(profiles.id, keptIds))
+          : eq(profiles.clientId, clientId),
+      );
+    for (const [position, creator] of input.creators.entries()) {
+      const values = { name: creator.name, linkedinUrl: creator.linkedinUrl, position };
+      if (creator.id) {
+        const key = creator.apiKey ? keyColumns(creator.apiKey) : {};
+        await tx
+          .update(profiles)
+          .set({ ...values, ...key })
+          .where(and(eq(profiles.id, creator.id), eq(profiles.clientId, clientId)));
+      } else {
+        await tx.insert(profiles).values({ clientId, ...values, ...keyColumns(creator.apiKey) });
+      }
+    }
+  });
   refresh();
   return { message: "Saved." };
 }

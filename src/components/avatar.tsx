@@ -37,3 +37,26 @@ export function Avatar({ name, size = "md" }: { name: string; size?: keyof typeo
     </span>
   );
 }
+
+/** Overlapping avatars for a joint client. Falls back to one avatar for a solo client. */
+export function ClientAvatar({
+  name,
+  creators,
+  size = "md",
+}: {
+  name: string;
+  creators: Array<{ name: string }>;
+  size?: keyof typeof sizes;
+}) {
+  if (creators.length < 2) return <Avatar name={name} size={size} />;
+  const shown = creators.slice(0, 3);
+  return (
+    <span className="flex shrink-0 -space-x-2">
+      {shown.map((creator, index) => (
+        <span key={index} className="rounded-full ring-2 ring-white">
+          <Avatar name={creator.name} size={size === "lg" ? "md" : "sm"} />
+        </span>
+      ))}
+    </span>
+  );
+}

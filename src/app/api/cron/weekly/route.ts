@@ -1,4 +1,5 @@
-import { clients, db } from "@/lib/db";
+import { asc } from "drizzle-orm";
+import { db, profiles } from "@/lib/db";
 import { currentWeek, isWeeklyRunHour } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
 
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
   }
 
   const period = currentWeek(now);
-  const queue = await db().select().from(clients);
+  const queue = await db().query.clients.findMany({ with: { profiles: { orderBy: [asc(profiles.position)] } } });
   const results: Array<{ client: string; reportId?: string; error?: string }> = [];
 
   async function worker() {
