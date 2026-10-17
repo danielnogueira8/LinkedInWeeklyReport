@@ -1,9 +1,10 @@
 import { extractPostIds, handleFromPostUrl, postedAtFromIds, profileHandle } from "@/lib/linkedin";
 
 // REST API reference: https://apex.leadshark.io/docs/api
-// The REST post objects follow Unipile's LinkedIn post shape (share_url,
-// impressions_counter, reaction_counter, ...), not the MCP's renamed
-// `engagement` object, so metrics are matched by name pattern across both.
+// GET /api/v1/posts sends { items, pagination: { cursor, has_more } }; each item has
+// metrics: { impressions, reactions, comments, reposts } and an author whose linkedin_id is
+// the public handle. Metrics are matched by name pattern, so the MCP's `engagement` object
+// and Unipile-style *_counter fields read the same way.
 const DEFAULT_BASE_URL = "https://apex.leadshark.io";
 
 const POSTS_PAGE_SIZE = 100;
@@ -33,7 +34,7 @@ export type LeadSharkPost = {
   fieldNames?: string[];
 };
 
-export type PostAuthor = { handle: string; name: string };
+export type PostAuthor = { handle: string; name: string; photo?: string };
 
 export type LeadSharkAutomation = {
   id: string;
@@ -211,17 +212,20 @@ const MEMBER_ID = /^acoa[\w-]{20,}$/i;
 function postAuthor(raw: Json, url: string): PostAuthor | null {
   const author = isObject(raw.author) ? raw.author : {};
   const name = str(author.name).trim();
-  const given = str(author.public_identifier ?? author.publicIdentifier)
+  // The REST API sends the handle as linkedin_id; other shapes call it public_identifier.
+  const given = str(author.public_identifier ?? author.publicIdentifier ?? author.linkedin_id)
     .trim()
     .toLowerCase();
   const field = given && !MEMBER_ID.test(given) ? given : null;
   // The link names whoever wrote the content, even when the API leaves the author out. On a
-  // repost the author field can be the reposter, so the link wins, and their name only
-  // counts when the two agree.
+  // repost the author field can be the reposter, so the link wins, and their name and photo
+  // only count when the two agree.
   const fromUrl = handleFromPostUrl(url);
   const handle = fromUrl ?? field;
   if (!handle) return null;
-  return { handle, name: !fromUrl || field === fromUrl ? name : "" };
+  if (fromUrl && field !== fromUrl) return { handle, name: "" };
+  const photo = str(author.profile_picture_url);
+  return { handle, name, ...(/^https:\/\//.test(photo) ? { photo } : {}) };
 }
 
 export function normalizePost(raw: unknown): LeadSharkPost | null {
@@ -350,8 +354,13 @@ function nextPage(
   if (!isObject(data)) return null;
   const containers = [data, data.pagination, data.paging, data.meta].filter(isObject);
   for (const container of containers) {
+    // LeadShark's REST envelope: pagination.cursor, sent back as ?cursor= (page and offset are ignored).
     const cursor = str(
-      container.next_cursor ?? container.nextCursor ?? container.next_page_token ?? container.nextPageToken,
+      container.next_cursor ??
+        container.nextCursor ??
+        container.next_page_token ??
+        container.nextPageToken ??
+        container.cursor,
     );
     if (cursor && cursor !== current.cursor) return { cursor };
   }
@@ -415,7 +424,11 @@ export async function listPostsSince(
     const batch = postsIn(data);
 
     const before = posts.size;
-    for (const post of batch) posts.set(post.id, post);
+    // A repost comes back with its original's post_id (and 0 impressions), so it must never
+    // replace the creator's own copy of the post.
+    for (const post of batch) {
+      if (!post.isRepost || (posts.get(post.id)?.isRepost ?? true)) posts.set(post.id, post);
+    }
 
     if (batch.some((post) => post.postedAt && post.postedAt < since && isOwn(post))) return result(true);
     // The same posts again: LeadShark ignored the paging parameter.
@@ -447,62 +460,15 @@ export async function listAutomations(apiKey: string): Promise<LeadSharkAutomati
   return automations;
 }
 
-// Profile photos. The REST docs we could reach don't list a profile lookup, so try the
-// likely ones and remember whichever returns a photo: the key owner's own account first
-// (each creator's key is their own), then enrich, as the MCP's `enrich` tool
-// (profile.profile_picture_url). Creators without one can have a photo link pasted in.
-type PhotoLookup = { path: string; post?: boolean; profile?: boolean };
-const PHOTO_LOOKUPS: PhotoLookup[] = [
-  { path: "/api/v1/me" },
-  { path: "/api/v1/profile" },
-  { path: "/api/v1/account" },
-  { path: "/api/me" },
-  { path: "/api/profile" },
-  { path: "/api/account" },
-  { path: "/api/v1/enrich", post: true, profile: true },
-  { path: "/api/v1/enrich", profile: true },
-  { path: "/api/enrich", post: true, profile: true },
-  { path: "/api/enrich", profile: true },
-];
-// Answers that just mean "not this endpoint" (or not on this plan).
-const NOT_HERE = [400, 403, 404, 405, 422];
-let workingLookup: PhotoLookup | null = null;
-
-const PICTURE_KEY = /^(profile_?)?(picture|photo|image|avatar)(_?url)?$/i;
-
-/** The first http(s) URL under a picture-ish key, searching a few levels deep. */
-export function findPictureUrl(data: unknown, depth = 0): string | null {
-  if (!isObject(data) || depth > 3) return null;
-  for (const [key, value] of Object.entries(data)) {
-    if (PICTURE_KEY.test(key) && typeof value === "string" && /^https?:\/\//.test(value)) return value;
-  }
-  for (const value of Object.values(data)) {
-    const nested = findPictureUrl(value, depth + 1);
-    if (nested) return nested;
-  }
-  return null;
-}
-
-async function lookUp(apiKey: string, lookup: PhotoLookup, profileUrl: string) {
-  const params = lookup.profile && !lookup.post ? { profile: profileUrl } : {};
-  const body = lookup.post ? { profile: profileUrl } : undefined;
-  return findPictureUrl(await request(apiKey, lookup.path, params, body));
-}
-
-/** The creator's LinkedIn photo URL via LeadShark, or null when LeadShark doesn't give one. */
+// Profile photos. The REST API has no "my profile" endpoint (/api/v1/me and the like are 404s)
+// and enrich's documented answer has no photo, but every post carries its author's
+// profile_picture_url. So the creator's own latest post gives theirs: a feed read, not a
+// profile view. Creators with no recent post of their own can have a photo link pasted in.
+/** The creator's LinkedIn photo URL, from their own recent posts, or null when none has one. */
 export async function findProfilePicture(apiKey: string, profileUrl: string): Promise<string | null> {
-  if (workingLookup) return lookUp(apiKey, workingLookup, profileUrl);
-  for (const lookup of PHOTO_LOOKUPS) {
-    try {
-      const url = await lookUp(apiKey, lookup, profileUrl);
-      if (!url) continue;
-      workingLookup = lookup;
-      return url;
-    } catch (err) {
-      if (err instanceof LeadSharkError && NOT_HERE.includes(err.status ?? 0)) continue;
-      throw err;
-    }
-  }
-  console.warn("No LeadShark endpoint returned a profile photo, so photos stay as initials until one is pasted in.");
-  return null;
+  const handle = profileHandle(profileUrl);
+  if (!handle) return null;
+  const posts = postsIn(await request(apiKey, "/api/v1/posts", { limit: SAFE_PAGE_SIZE }));
+  const own = posts.find((post) => !post.isRepost && post.author?.handle === handle && post.author.photo);
+  return own?.author?.photo ?? null;
 }

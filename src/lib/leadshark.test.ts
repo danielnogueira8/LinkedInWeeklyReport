@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  findPictureUrl,
   findProfilePicture,
   isOwnPost,
   LeadSharkError,
@@ -63,7 +62,43 @@ describe("linkedin ids", () => {
 });
 
 describe("normalizePost", () => {
-  it("reads the REST shape (Unipile-style counters) and strips tracking from the link", () => {
+  it("reads the REST shape: metrics, and the author's handle, name and photo", () => {
+    const photo = "https://media.licdn.com/dms/image/v2/C4D03/profile-displayphoto?e=1793836800&v=beta&t=x";
+    const normalized = normalizePost({
+      post_id: "urn:li:activity:7517158903458086912",
+      share_url:
+        "https://www.linkedin.com/posts/clare-thompson-51140ba5_in-november-2023-mars-agreed-to-buy-hotel-activity-7517158903458086912-t0bw?utm_source=social_share_send&utm_medium=member_desktop_web&rcm=ACoAABZOzR0BSfMcAKthreRFv80BDABBt42NAgI",
+      text: "In November 2023 Mars agreed to buy Hotel Chocolat for £534m",
+      posted_at: "2026-10-17T09:45:44.643Z",
+      posted_at_label: "9h",
+      is_repost: false,
+      repost_of: null,
+      author: {
+        linkedin_id: "clare-thompson-51140ba5",
+        member_urn: "urn:li:fsd_profile:ACoAABZOzR0BSfMcAKthreRFv80BDABBt42NAgI",
+        name: "Clare Thompson",
+        headline: "Accountant",
+        profile_picture_url: photo,
+        is_company: false,
+      },
+      metrics: { impressions: 1187, reactions: 0, comments: 0, reposts: 0 },
+      attachments: [],
+      mentions: [],
+    });
+    expect(normalized).toMatchObject({
+      impressions: 1187,
+      reactions: 0,
+      comments: 0,
+      reposts: 0,
+      hasEngagement: true,
+      isRepost: false,
+      postedAt: new Date("2026-10-17T09:45:44.643Z"),
+      url: "https://www.linkedin.com/posts/clare-thompson-51140ba5_in-november-2023-mars-agreed-to-buy-hotel-activity-7517158903458086912-t0bw",
+      author: { handle: "clare-thompson-51140ba5", name: "Clare Thompson", photo },
+    });
+  });
+
+  it("reads Unipile-style counters and strips tracking from the link", () => {
     const normalized = normalizePost({
       object: "Post",
       post_id: "urn:li:activity:7516785192234024960",
@@ -174,6 +209,41 @@ describe("listPostsSince paging styles", () => {
   const recent = (count: number, day = 16) =>
     Array.from({ length: count }, (_, i) => post(`2026-10-${day}T${String(i % 24).padStart(2, "0")}:00:00Z`));
 
+  it("follows pagination.cursor, the REST API's paging", async () => {
+    const calls = mockFetch([
+      { scope: "self", items: recent(20), pagination: { cursor: "eyJzdGFydCI6MjB9", has_more: true } },
+      {
+        scope: "self",
+        items: [post("2026-10-01T10:00:00Z")],
+        pagination: { cursor: "eyJzdGFydCI6NDB9", has_more: true },
+      },
+    ]);
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(calls).toHaveLength(2);
+    expect(calls[1].searchParams.get("cursor")).toBe("eyJzdGFydCI6MjB9");
+    expect(calls[1].searchParams.has("page")).toBe(false);
+    expect(result.complete).toBe(true);
+  });
+
+  it("stops when the cursor runs out", async () => {
+    const calls = mockFetch([{ items: recent(10), pagination: { cursor: null, has_more: false } }]);
+    expect((await listPostsSince("key", new Date("2026-10-05T00:00:00Z"))).complete).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the creator's own post when a repost of it comes with the same id", async () => {
+    const own = { ...post("2026-10-16T09:30:00Z"), is_repost: false, engagement: { impressions: 4787 } };
+    const repost = { ...own, is_repost: true, engagement: { impressions: 0 } };
+    for (const items of [
+      [repost, own],
+      [own, repost],
+    ]) {
+      mockFetch([{ items: [...items, post("2026-10-01T10:00:00Z")] }]);
+      const { posts } = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+      expect(posts.find((p) => p.id === own.post_id)).toMatchObject({ isRepost: false, impressions: 4787 });
+    }
+  });
+
   it("follows page numbers when there's no cursor", async () => {
     const calls = mockFetch([
       { items: recent(20), pagination: { page: 1, has_more: true } },
@@ -234,43 +304,20 @@ describe("listPostsSince paging styles", () => {
 });
 
 describe("profile photos", () => {
-  it("finds the picture in an enrich-style response", () => {
-    expect(
-      findPictureUrl({ profile: { name: "Daniel", profile_picture_url: "https://media.licdn.com/dms/image/x" } }),
-    ).toBe("https://media.licdn.com/dms/image/x");
-    expect(findPictureUrl({ profile: { name: "Daniel" } })).toBeNull();
-  });
-
-  it("tries the likely endpoints and remembers the first that returns a photo", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL, init: RequestInit) => {
-        const { pathname } = new URL(url);
-        calls.push(`${init.method} ${pathname}`);
-        // Answers, but with no photo: not the one.
-        if (pathname === "/api/v1/me") return new Response(JSON.stringify({ user: { email: "a@b.co" } }));
-        if (pathname !== "/api/v1/enrich" || init.method === "POST") return new Response("{}", { status: 404 });
-        return new Response(JSON.stringify({ profile: { profile_picture_url: "https://media.licdn.com/p.jpg" } }));
-      }),
-    );
-    expect(await findProfilePicture("key", "https://www.linkedin.com/in/daniel-h-n")).toBe(
-      "https://media.licdn.com/p.jpg",
-    );
-    expect(await findProfilePicture("key", "https://www.linkedin.com/in/someone")).toBe(
-      "https://media.licdn.com/p.jpg",
-    );
-    expect(calls).toEqual([
-      "GET /api/v1/me",
-      "GET /api/v1/profile",
-      "GET /api/v1/account",
-      "GET /api/me",
-      "GET /api/profile",
-      "GET /api/account",
-      "POST /api/v1/enrich",
-      "GET /api/v1/enrich",
-      "GET /api/v1/enrich",
-    ]);
+  it("takes the creator's photo from their own latest post, not from a repost", async () => {
+    const photo = (handle: string) => `https://media.licdn.com/dms/image/v2/${handle}/profile-displayphoto`;
+    const item = (handle: string, extra = {}) => ({
+      post_id: "urn:li:activity:7516785192234024960",
+      share_url: `https://www.linkedin.com/posts/${handle}_a-post-activity-7516785192234024960-zc4X`,
+      author: { linkedin_id: handle, name: handle, profile_picture_url: photo(handle) },
+      ...extra,
+    });
+    // Damon's key: his own post, plus a repost of Clare's.
+    const calls = mockFetch([{ items: [item("clare-thompson-51140ba5", { is_repost: true }), item("damonmillar")] }]);
+    expect(await findProfilePicture("key", "https://www.linkedin.com/in/damonmillar")).toBe(photo("damonmillar"));
+    expect(calls.map((url) => url.pathname)).toEqual(["/api/v1/posts"]);
+    // Clare only shows up as a repost here, so this key has no photo of hers.
+    expect(await findProfilePicture("key", "https://www.linkedin.com/in/clare-thompson-51140ba5")).toBeNull();
   });
 });
 

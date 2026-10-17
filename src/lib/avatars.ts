@@ -4,7 +4,7 @@ import { db, profiles, type Profile } from "@/lib/db";
 import { findProfilePicture } from "@/lib/leadshark";
 
 // LinkedIn photo links expire after a few weeks, so the image itself is stored and
-// refreshed about weekly (each lookup can be a real profile view on the creator's account).
+// refreshed about weekly (each lookup reads a page of the creator's posts from LeadShark).
 // A lookup that found nothing is tried again sooner.
 const REFRESH_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRY_AFTER_MS = 6 * 60 * 60 * 1000;
