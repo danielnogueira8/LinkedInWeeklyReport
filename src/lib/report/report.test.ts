@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAutomation, normalizePost } from "@/lib/leadshark";
 import { buildReportData } from "@/lib/report/build";
+import { weeklySeries } from "@/lib/report/compare";
 import { renderReportPdf } from "@/lib/report/pdf";
 import { defaultHighlights, dmsSummary, parseHighlights, renderReportText } from "@/lib/report/text";
 
@@ -323,5 +324,25 @@ describe("weekly report", () => {
     });
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(2000);
+  });
+});
+
+describe("weekly series", () => {
+  it("keeps one report per week, the latest built, even across timezones", () => {
+    const totals = { posts: 0, impressions: 0, reactions: 0, comments: 0, reposts: 0, firstDms: 0, followUps: 0 };
+    const row = (start: string, end: string, timezone: string, generatedAt: string, impressions: number) => ({
+      periodStart: new Date(start),
+      periodEnd: new Date(end),
+      timezone,
+      generatedAt: new Date(generatedAt),
+      totals: { ...totals, impressions },
+    });
+    const series = weeklySeries([
+      row("2026-10-05T00:00:00Z", "2026-10-12T00:00:00Z", "UTC", "2026-10-17T17:32:00Z", 0),
+      row("2026-10-04T23:00:00Z", "2026-10-11T23:00:00Z", "Europe/Lisbon", "2026-10-17T18:24:00Z", 86500),
+      row("2026-10-12T00:00:00Z", "2026-10-19T00:00:00Z", "UTC", "2026-10-17T17:33:00Z", 0),
+      row("2026-10-11T23:00:00Z", "2026-10-18T23:00:00Z", "Europe/Lisbon", "2026-10-17T18:48:00Z", 11689),
+    ]);
+    expect(series.map((week) => week.totals.impressions)).toEqual([86500, 11689]);
   });
 });

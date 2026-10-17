@@ -32,6 +32,11 @@ export function postedAtFromIds(...sources: Array<string | null | undefined>): D
   return null;
 }
 
+/** "alex-olim" from a saved profile URL, lowercased for comparing. */
+export function profileHandle(profileUrl: string): string | null {
+  return normalizeProfileUrl(profileUrl)?.split("/in/")[1]?.toLowerCase() || null;
+}
+
 /** Accepts linkedin.com/in/<slug> URLs, with or without protocol or www. */
 export function normalizeProfileUrl(input: string): string | null {
   const trimmed = input.trim();

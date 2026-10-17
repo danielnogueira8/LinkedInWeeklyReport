@@ -1,7 +1,7 @@
 import { refreshStaleAvatars } from "@/lib/avatars";
 import { decrypt } from "@/lib/crypto";
 import { db, reports, type ClientWithProfiles, type Profile, type Report } from "@/lib/db";
-import { LeadSharkError, listAutomations, listPostsSince } from "@/lib/leadshark";
+import { feedOwner, LeadSharkError, listAutomations, listPostsSince, otherKeyOwner } from "@/lib/leadshark";
 import { dayMonth, reportTimezone, weekdayShort, type Period } from "@/lib/period";
 import { buildReportData, type ReportSource } from "@/lib/report/build";
 
@@ -23,6 +23,12 @@ async function fetchSource(
         return [];
       }),
     ]);
+    const other = otherKeyOwner(feedOwner(postsResult.posts), profile);
+    if (other) {
+      warnings.push(
+        `${joint ? `${profile.name}'s` : "This"} LeadShark key returns posts by ${other.name || other.handle} (linkedin.com/in/${other.handle}), not ${profile.linkedinUrl.replace(/^https:\/\/www\./, "")}. Paste the right key in the client's settings, then refresh.`,
+      );
+    }
     if (!postsResult.complete) {
       const tz = reportTimezone();
       const back = postsResult.oldest

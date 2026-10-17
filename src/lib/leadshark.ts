@@ -1,4 +1,4 @@
-import { extractPostIds, postedAtFromIds } from "@/lib/linkedin";
+import { extractPostIds, postedAtFromIds, profileHandle } from "@/lib/linkedin";
 
 // REST API reference: https://apex.leadshark.io/docs/api
 // The REST post objects follow Unipile's LinkedIn post shape (share_url,
@@ -23,11 +23,15 @@ export type LeadSharkPost = {
   comments: number;
   reposts: number;
   automationId: string | null;
+  /** Who wrote it (null on reposts, or when LeadShark doesn't say). */
+  author: PostAuthor | null;
   /** False when none of the four metrics were present on the post at all. */
   hasEngagement: boolean;
   /** The post's field names, kept only when no metrics were recognised (for the report warning). */
   fieldNames?: string[];
 };
+
+export type PostAuthor = { handle: string; name: string };
 
 export type LeadSharkAutomation = {
   id: string;
@@ -199,6 +203,20 @@ function parseDate(value: unknown): Date | null {
   return null;
 }
 
+// LinkedIn member ids (ACoAA...) can stand in for a profile slug; they aren't comparable to URLs.
+const MEMBER_ID = /^acoa[\w-]{20,}$/i;
+
+function postAuthor(raw: Json): PostAuthor | null {
+  // A repost's author is whoever wrote the original.
+  if (raw.is_repost === true || isObject(raw.reposted_by)) return null;
+  const author = isObject(raw.author) ? raw.author : {};
+  const handle = str(author.public_identifier ?? author.publicIdentifier)
+    .trim()
+    .toLowerCase();
+  if (!handle || MEMBER_ID.test(handle)) return null;
+  return { handle, name: str(author.name).trim() };
+}
+
 export function normalizePost(raw: unknown): LeadSharkPost | null {
   if (!isObject(raw)) return null;
   const id = str(raw.post_id ?? raw.social_id ?? raw.urn ?? raw.id);
@@ -228,6 +246,7 @@ export function normalizePost(raw: unknown): LeadSharkPost | null {
     comments: metrics.comments ?? 0,
     reposts: metrics.reposts ?? 0,
     automationId: str(raw.automation_id) || null,
+    author: postAuthor(raw),
     hasEngagement,
     ...(hasEngagement ? {} : { fieldNames: fieldNames(raw) }),
   };
@@ -250,9 +269,33 @@ export function normalizeAutomation(raw: unknown): LeadSharkAutomation | null {
   };
 }
 
-/** Cheap call used to check an API key before saving a client. */
-export async function verifyApiKey(apiKey: string): Promise<void> {
-  await request(apiKey, "/api/v1/posts", { limit: 1 });
+function postsIn(data: unknown): LeadSharkPost[] {
+  return firstArray(data, ["items", "posts", "data"])
+    .map(normalizePost)
+    .filter((post): post is LeadSharkPost => post !== null);
+}
+
+/** Whose posts these are: the most common author among them, when LeadShark names one. */
+export function feedOwner(posts: LeadSharkPost[]): PostAuthor | null {
+  const counts = new Map<string, { author: PostAuthor; posts: number }>();
+  for (const { author } of posts) {
+    if (author) counts.set(author.handle, { author, posts: (counts.get(author.handle)?.posts ?? 0) + 1 });
+  }
+  return [...counts.values()].sort((a, b) => b.posts - a.posts)[0]?.author ?? null;
+}
+
+/** The key's owner when it isn't this creator, i.e. a key copied from someone else's account. */
+export function otherKeyOwner(owner: PostAuthor | null, creator: { name: string; linkedinUrl: string }) {
+  if (!owner) return null;
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const handle = profileHandle(creator.linkedinUrl);
+  if (!handle || same(owner.handle, handle) || (owner.name && same(owner.name, creator.name))) return null;
+  return owner;
+}
+
+/** Checks an API key before it's saved. Returns whose posts it reads, when LeadShark says. */
+export async function verifyApiKey(apiKey: string): Promise<PostAuthor | null> {
+  return feedOwner(postsIn(await request(apiKey, "/api/v1/posts", { limit: SAFE_PAGE_SIZE })));
 }
 
 export type PostsResult = {
@@ -319,9 +362,7 @@ export async function listPostsSince(apiKey: string, since: Date): Promise<Posts
       throw err;
     }
     responseFields = isObject(data) ? Object.keys(data) : [];
-    const batch = firstArray(data, ["items", "posts", "data"])
-      .map(normalizePost)
-      .filter((post): post is LeadSharkPost => post !== null);
+    const batch = postsIn(data);
 
     const before = posts.size;
     for (const post of batch) posts.set(post.id, post);
@@ -358,16 +399,26 @@ export async function listAutomations(apiKey: string): Promise<LeadSharkAutomati
   return automations;
 }
 
-// Profile photos come from LeadShark's enrich lookup (the MCP's `enrich` returns
-// profile.profile_picture_url). The REST path isn't in the public docs we could
-// reach, so try the likely shapes and remember whichever one answers.
-const ENRICH_ATTEMPTS: Array<{ path: string; post: boolean }> = [
-  { path: "/api/v1/enrich", post: true },
-  { path: "/api/v1/enrich", post: false },
-  { path: "/api/enrich", post: true },
-  { path: "/api/enrich", post: false },
+// Profile photos. The REST docs we could reach don't list a profile lookup, so try the
+// likely ones and remember whichever returns a photo: the key owner's own account first
+// (each creator's key is their own), then enrich, as the MCP's `enrich` tool
+// (profile.profile_picture_url). Creators without one can have a photo link pasted in.
+type PhotoLookup = { path: string; post?: boolean; profile?: boolean };
+const PHOTO_LOOKUPS: PhotoLookup[] = [
+  { path: "/api/v1/me" },
+  { path: "/api/v1/profile" },
+  { path: "/api/v1/account" },
+  { path: "/api/me" },
+  { path: "/api/profile" },
+  { path: "/api/account" },
+  { path: "/api/v1/enrich", post: true, profile: true },
+  { path: "/api/v1/enrich", profile: true },
+  { path: "/api/enrich", post: true, profile: true },
+  { path: "/api/enrich", profile: true },
 ];
-let workingEnrich: (typeof ENRICH_ATTEMPTS)[number] | null = null;
+// Answers that just mean "not this endpoint" (or not on this plan).
+const NOT_HERE = [400, 403, 404, 405, 422];
+let workingLookup: PhotoLookup | null = null;
 
 const PICTURE_KEY = /^(profile_?)?(picture|photo|image|avatar)(_?url)?$/i;
 
@@ -384,21 +435,26 @@ export function findPictureUrl(data: unknown, depth = 0): string | null {
   return null;
 }
 
-/** The creator's LinkedIn photo URL via LeadShark, or null when there's none (or no endpoint answered). */
+async function lookUp(apiKey: string, lookup: PhotoLookup, profileUrl: string) {
+  const params = lookup.profile && !lookup.post ? { profile: profileUrl } : {};
+  const body = lookup.post ? { profile: profileUrl } : undefined;
+  return findPictureUrl(await request(apiKey, lookup.path, params, body));
+}
+
+/** The creator's LinkedIn photo URL via LeadShark, or null when LeadShark doesn't give one. */
 export async function findProfilePicture(apiKey: string, profileUrl: string): Promise<string | null> {
-  for (const attempt of workingEnrich ? [workingEnrich] : ENRICH_ATTEMPTS) {
-    let data: unknown;
+  if (workingLookup) return lookUp(apiKey, workingLookup, profileUrl);
+  for (const lookup of PHOTO_LOOKUPS) {
     try {
-      data = attempt.post
-        ? await request(apiKey, attempt.path, {}, { profile: profileUrl })
-        : await request(apiKey, attempt.path, { profile: profileUrl });
+      const url = await lookUp(apiKey, lookup, profileUrl);
+      if (!url) continue;
+      workingLookup = lookup;
+      return url;
     } catch (err) {
-      if (err instanceof LeadSharkError && [400, 404, 405].includes(err.status ?? 0) && !workingEnrich) continue;
+      if (err instanceof LeadSharkError && NOT_HERE.includes(err.status ?? 0)) continue;
       throw err;
     }
-    workingEnrich = attempt;
-    return findPictureUrl(data);
   }
-  console.warn("No LeadShark enrich endpoint answered, so profile photos stay as initials.");
+  console.warn("No LeadShark endpoint returned a profile photo, so photos stay as initials until one is pasted in.");
   return null;
 }

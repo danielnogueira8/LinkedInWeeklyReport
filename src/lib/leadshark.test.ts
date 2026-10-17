@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  feedOwner,
   findPictureUrl,
   findProfilePicture,
   LeadSharkError,
   listAutomations,
   listPostsSince,
   normalizePost,
+  otherKeyOwner,
+  verifyApiKey,
 } from "@/lib/leadshark";
 import { extractPostIds, normalizeProfileUrl, timestampFromPostId } from "@/lib/linkedin";
 
@@ -226,13 +229,16 @@ describe("profile photos", () => {
     expect(findPictureUrl({ profile: { name: "Daniel" } })).toBeNull();
   });
 
-  it("tries the likely enrich endpoints and remembers the one that answers", async () => {
+  it("tries the likely endpoints and remembers the first that returns a photo", async () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: URL, init: RequestInit) => {
-        calls.push(`${init.method} ${new URL(url).pathname}`);
-        if (init.method === "POST") return new Response("{}", { status: 404 });
+        const { pathname } = new URL(url);
+        calls.push(`${init.method} ${pathname}`);
+        // Answers, but with no photo: not the one.
+        if (pathname === "/api/v1/me") return new Response(JSON.stringify({ user: { email: "a@b.co" } }));
+        if (pathname !== "/api/v1/enrich" || init.method === "POST") return new Response("{}", { status: 404 });
         return new Response(JSON.stringify({ profile: { profile_picture_url: "https://media.licdn.com/p.jpg" } }));
       }),
     );
@@ -242,7 +248,55 @@ describe("profile photos", () => {
     expect(await findProfilePicture("key", "https://www.linkedin.com/in/someone")).toBe(
       "https://media.licdn.com/p.jpg",
     );
-    expect(calls).toEqual(["POST /api/v1/enrich", "GET /api/v1/enrich", "GET /api/v1/enrich"]);
+    expect(calls).toEqual([
+      "GET /api/v1/me",
+      "GET /api/v1/profile",
+      "GET /api/v1/account",
+      "GET /api/me",
+      "GET /api/profile",
+      "GET /api/account",
+      "POST /api/v1/enrich",
+      "GET /api/v1/enrich",
+      "GET /api/v1/enrich",
+    ]);
+  });
+});
+
+describe("key owners", () => {
+  const authored = (handle: string, name: string, extra = {}) => ({
+    post_id: "urn:li:activity:7516785192234024960",
+    author: { public_identifier: handle, name },
+    ...extra,
+  });
+
+  it("reads who wrote a post, but not for reposts or member ids", () => {
+    expect(normalizePost(authored("Clare-Thompson-51140ba5", "Clare Thompson"))?.author).toEqual({
+      handle: "clare-thompson-51140ba5",
+      name: "Clare Thompson",
+    });
+    expect(normalizePost(authored("damonmillar", "Damon Millar", { is_repost: true }))?.author).toBeNull();
+    expect(normalizePost(authored("ACoAAAWtE78B6Hegj7EIoiN07oWE6W7gI95vjyk", "Damon"))?.author).toBeNull();
+  });
+
+  it("flags a key that reads someone else's posts", async () => {
+    mockFetch([
+      {
+        items: [
+          authored("damonmillar", "Damon Millar"),
+          authored("someone-else", "Someone Else", { is_repost: true }),
+          authored("damonmillar", "Damon Millar"),
+        ],
+      },
+    ]);
+    const owner = await verifyApiKey("key");
+    expect(owner).toEqual({ handle: "damonmillar", name: "Damon Millar" });
+    const clare = { name: "Clare Thompson", linkedinUrl: "https://www.linkedin.com/in/clare-thompson-51140ba5" };
+    expect(otherKeyOwner(owner, clare)).toEqual(owner);
+    expect(otherKeyOwner(owner, { name: "Damon", linkedinUrl: "https://www.linkedin.com/in/DamonMillar" })).toBeNull();
+    // A changed URL with the right person still passes on the name.
+    expect(otherKeyOwner(owner, { name: "Damon Millar", linkedinUrl: "https://www.linkedin.com/in/old" })).toBeNull();
+    // Nothing to compare: no complaint.
+    expect(otherKeyOwner(feedOwner([]), clare)).toBeNull();
   });
 });
 

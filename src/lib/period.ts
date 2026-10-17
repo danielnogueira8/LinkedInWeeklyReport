@@ -114,9 +114,20 @@ export function formatPeriod({ start, end }: Period, tz = reportTimezone()): str
   return `${from} to ${b.weekday} ${b.day} ${b.month} ${b.year}`;
 }
 
-/** The period hasn't finished yet (e.g. this week's report before Sunday night is over). */
-export function isInProgress({ end }: Period) {
-  return end.getTime() > Date.now();
+/** When the weekly run builds a calendar week's report: its Sunday, 21:00 local. */
+export function weeklyRunAt({ end }: Period, tz = reportTimezone()): Date {
+  const run = subDays(new TZDate(end, tz), 1);
+  run.setHours(WEEKLY_RUN.hour, 0, 0, 0);
+  return new Date(run.getTime());
+}
+
+/**
+ * The numbers only cover part of the period: the report was built before it ended. A
+ * calendar week counts as complete from its Sunday 21:00 run, the report clients get.
+ */
+export function isPartial(period: Period, generatedAt: Date, tz = reportTimezone()) {
+  const complete = isCalendarWeek(period, tz) ? weeklyRunAt(period, tz) : period.end;
+  return generatedAt.getTime() < complete.getTime();
 }
 
 /** True for Monday-00:00-to-Monday reports (not the rolling "last 7 days" kind). */

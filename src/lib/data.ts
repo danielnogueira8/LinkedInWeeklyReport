@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { clients, db, profiles, reports } from "@/lib/db";
+import { localDate } from "@/lib/period";
 import type { ReportTotals } from "@/lib/report/build";
 import { previousWeek, weeklySeries } from "@/lib/report/compare";
 
@@ -37,6 +38,7 @@ export async function listClientsOverview() {
         clientId: reports.clientId,
         periodStart: reports.periodStart,
         periodEnd: reports.periodEnd,
+        generatedAt: reports.generatedAt,
         timezone: sql<string>`${reports.data}->>'timezone'`,
         totals: sql<ReportTotals>`${reports.data}->'totals'`,
       })
@@ -62,11 +64,15 @@ export async function getClient(id: string) {
   );
 }
 
+/** Newest week first; within a week, the most recently built first. */
 export async function listReports(clientId: string) {
-  return db().query.reports.findMany({
+  const rows = await db().query.reports.findMany({
     where: eq(reports.clientId, clientId),
-    orderBy: [desc(reports.periodStart), desc(reports.generatedAt)],
+    orderBy: [desc(reports.generatedAt)],
   });
+  // Compared by local start date: a week built under another timezone starts an hour or so apart.
+  const day = (row: (typeof rows)[number]) => localDate(row.periodStart, row.data.timezone);
+  return rows.sort((a, b) => day(b).localeCompare(day(a)));
 }
 
 export async function getReportWithClient(id: string) {

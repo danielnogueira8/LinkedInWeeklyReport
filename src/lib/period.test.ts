@@ -3,12 +3,14 @@ import { decrypt, encrypt } from "@/lib/crypto";
 import {
   currentWeek,
   formatPeriod,
+  isPartial,
   isWeeklyRunHour,
   lastFullWeek,
   periodOptions,
   periodValue,
   resolvePeriod,
   weeklyRunLabel,
+  weeklyRunAt,
 } from "@/lib/period";
 
 const saturday = new Date("2026-10-17T12:00:00Z");
@@ -58,6 +60,22 @@ describe("periods", () => {
     const week = currentWeek(new Date("2026-10-18T20:05:00Z"), "Europe/Lisbon");
     expect(formatPeriod(week, "Europe/Lisbon")).toBe("Mon 12 Oct to Mon 19 Oct 2026");
     expect(resolvePeriod(periodValue(week, "Europe/Lisbon"), saturday, "Europe/Lisbon")).toEqual(week);
+  });
+
+  it("treats a week as partial until its Sunday 21:00 build", () => {
+    const lisbon = "Europe/Lisbon";
+    const week = currentWeek(saturday, lisbon);
+    expect(weeklyRunAt(week, lisbon).toISOString()).toBe("2026-10-18T20:00:00.000Z");
+    // Built on Saturday: partial, whenever you look at it.
+    expect(isPartial(week, new Date("2026-10-17T18:48:00Z"), lisbon)).toBe(true);
+    // The Sunday run (and anything after) is the full week.
+    expect(isPartial(week, new Date("2026-10-18T20:00:04Z"), lisbon)).toBe(false);
+    // The week Lisbon leaves summer time: its run is 21:00 UTC.
+    const next = currentWeek(new Date("2026-10-21T12:00:00Z"), lisbon);
+    expect(weeklyRunAt(next, lisbon).toISOString()).toBe("2026-10-25T21:00:00.000Z");
+    // A rolling 7 days is complete once its end has passed.
+    const rolling = resolvePeriod("last7", saturday, lisbon)!;
+    expect(isPartial(rolling, rolling.end, lisbon)).toBe(false);
   });
 
   it("shows the start year when the week spans New Year", () => {

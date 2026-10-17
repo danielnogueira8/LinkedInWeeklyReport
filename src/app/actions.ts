@@ -3,12 +3,11 @@
 import { and, eq, notInArray } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
-import { after } from "next/server";
-import { refreshAvatarsInBackground } from "@/lib/avatars";
+import { downloadPhoto, photoColumns, refreshAvatar } from "@/lib/avatars";
 import { encrypt, ENCRYPTION_KEY_MISSING, encryptionReady } from "@/lib/crypto";
 import { getClient, getReportWithClient } from "@/lib/data";
 import { clients, db, profiles, reports, type ClientWithProfiles } from "@/lib/db";
-import { LeadSharkError, verifyApiKey } from "@/lib/leadshark";
+import { LeadSharkError, otherKeyOwner, verifyApiKey } from "@/lib/leadshark";
 import { normalizeProfileUrl } from "@/lib/linkedin";
 import { lastFullWeek, resolvePeriod, type Period } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
@@ -42,18 +41,19 @@ function joinNames(names: string[]) {
   return names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} & ${names.at(-1)}`;
 }
 
-type CreatorInput = { id: string; name: string; linkedinUrl: string; apiKey: string };
+type CreatorInput = { id: string; name: string; linkedinUrl: string; apiKey: string; photoLink: string };
 
 /**
  * The client form posts one row per creator (creatorId/creatorName/creatorUrl/creatorKey,
- * in order). One row is a solo report titled with the creator's name; two or more are
- * a joint report with an optional title.
+ * plus creatorPhoto when editing, in order). One row is a solo report titled with the
+ * creator's name; two or more are a joint report with an optional title.
  */
 function readClientForm(formData: FormData, existingIds: Set<string>) {
   const ids = all(formData, "creatorId");
   const names = all(formData, "creatorName");
   const urls = all(formData, "creatorUrl");
   const keys = all(formData, "creatorKey");
+  const photoLinks = all(formData, "creatorPhoto");
   const joint = ids.length > 1;
   const fail = (error: string) => ({ ok: false, error }) as const;
 
@@ -70,7 +70,7 @@ function readClientForm(formData: FormData, existingIds: Set<string>) {
     if (creators.some((creator) => creator.linkedinUrl === linkedinUrl)) {
       return fail("The same LinkedIn profile is in there twice.");
     }
-    creators.push({ id, name: names[index], linkedinUrl, apiKey });
+    creators.push({ id, name: names[index], linkedinUrl, apiKey, photoLink: photoLinks[index] ?? "" });
   }
 
   const title = joint
@@ -79,22 +79,42 @@ function readClientForm(formData: FormData, existingIds: Set<string>) {
   return { ok: true, title, creators } as const;
 }
 
-/** Checks every newly pasted key with LeadShark; the error names the creator it belongs to. */
+/**
+ * Checks every newly pasted key with LeadShark, including that it reads this creator's
+ * own posts. The error names the creator it belongs to.
+ */
 async function checkKeys(creators: CreatorInput[]): Promise<string | null> {
   if (creators.some((creator) => creator.apiKey) && !encryptionReady()) return ENCRYPTION_KEY_MISSING;
   const results = await Promise.all(
     creators.map(async (creator) => {
       if (!creator.apiKey) return null;
+      let message: string | null = null;
       try {
-        await verifyApiKey(creator.apiKey);
-        return null;
+        const other = otherKeyOwner(await verifyApiKey(creator.apiKey), creator);
+        if (other) {
+          message = `That key is ${other.name || other.handle}'s (linkedin.com/in/${other.handle}), not ${creator.linkedinUrl.replace(/^https:\/\/www\./, "")}. Copy the key from this creator's own LeadShark account, or fix the profile URL if it changed.`;
+        }
       } catch (err) {
-        const message = describe(err);
-        return creators.length > 1 ? `${creator.name}: ${message}` : message;
+        message = describe(err);
       }
+      return message && creators.length > 1 ? `${creator.name}: ${message}` : message;
     }),
   );
   return results.find(Boolean) ?? null;
+}
+
+/** Downloads any pasted photo links, in creator order. The error names whose link didn't work. */
+async function fetchPhotos(creators: CreatorInput[]) {
+  const photos = await Promise.all(
+    creators.map((creator) => (creator.photoLink ? downloadPhoto(creator.photoLink) : null)),
+  );
+  const broken = creators.findIndex((creator, index) => creator.photoLink && !photos[index]);
+  if (broken === -1) return { ok: true, photos } as const;
+  const whose = creators.length > 1 ? `${creators[broken].name}: ` : "";
+  return {
+    ok: false,
+    error: `${whose}That photo link didn't load a LinkedIn photo. On their profile, open the photo, right-click it and choose Copy image address.`,
+  } as const;
 }
 
 function keyColumns(apiKey: string) {
@@ -142,8 +162,10 @@ export async function updateClient(clientId: string, _prev: FormState, formData:
   if (!existing) return { error: "This client no longer exists." };
   const input = readClientForm(formData, new Set(existing.profiles.map((profile) => profile.id)));
   if (!input.ok) return { error: input.error };
-  const rejected = await checkKeys(input.creators);
+  const [rejected, fetched] = await Promise.all([checkKeys(input.creators), fetchPhotos(input.creators)]);
   if (rejected) return { error: rejected };
+  if (!fetched.ok) return { error: fetched.error };
+  const { photos } = fetched;
 
   const keptIds = input.creators.map((creator) => creator.id).filter(Boolean);
   await db().transaction(async (tx) => {
@@ -157,25 +179,34 @@ export async function updateClient(clientId: string, _prev: FormState, formData:
       );
     for (const [position, creator] of input.creators.entries()) {
       const values = { name: creator.name, linkedinUrl: creator.linkedinUrl, position };
+      const pasted = photos[position] ? photoColumns(photos[position]) : null;
       if (creator.id) {
         const key = creator.apiKey ? keyColumns(creator.apiKey) : {};
-        // A different profile means a different photo: clear it so it's fetched again below.
+        // A different profile means a different photo: clear it so it's looked up again below.
         const moved =
           existing.profiles.find((profile) => profile.id === creator.id)?.linkedinUrl !== creator.linkedinUrl;
-        const photo = moved ? { avatar: null, avatarType: null, avatarVersion: null, avatarCheckedAt: null } : {};
+        const photo =
+          pasted ?? (moved ? { avatar: null, avatarType: null, avatarVersion: null, avatarCheckedAt: null } : {});
         await tx
           .update(profiles)
           .set({ ...values, ...key, ...photo })
           .where(and(eq(profiles.id, creator.id), eq(profiles.clientId, clientId)));
       } else {
-        await tx.insert(profiles).values({ clientId, ...values, ...keyColumns(creator.apiKey) });
+        await tx.insert(profiles).values({ clientId, ...values, ...keyColumns(creator.apiKey), ...pasted });
       }
     }
   });
-  // New or moved creators have no photo yet; fetch them once the response is sent.
-  after(refreshAvatarsInBackground);
+
+  // Anyone still without a photo gets a LeadShark lookup now, so the answer shows up here.
+  const missing = (await getClient(clientId))?.profiles.filter((profile) => !profile.avatarVersion) ?? [];
+  const found = await Promise.all(missing.map(refreshAvatar));
+  const without = missing.filter((_, index) => !found[index]).map((profile) => profile.name);
   refresh();
-  return { message: "Saved." };
+  return {
+    message: without.length
+      ? `Saved. LeadShark didn't return a photo for ${joinNames(without)}. Paste a photo link to add one.`
+      : "Saved.",
+  };
 }
 
 export async function deleteClient(clientId: string) {

@@ -5,10 +5,11 @@ import { avatarSrc, ClientAvatar } from "@/components/avatar";
 import { Sparkline } from "@/components/charts";
 import { compact, Delta } from "@/components/metrics";
 import { EmptyState, PageHeader } from "@/components/page-header";
+import { PartialWeek } from "@/components/partial-week";
 import { button, card, pill } from "@/components/ui";
 import { refreshAvatarsInBackground } from "@/lib/avatars";
 import { listClientsOverview } from "@/lib/data";
-import { isInProgress, shortRange, weeklyRunLabel } from "@/lib/period";
+import { isPartial, shortRange, weeklyRunLabel } from "@/lib/period";
 import { change, metricValue, weekSlots } from "@/lib/report/compare";
 import { formatNumber } from "@/lib/report/text";
 
@@ -95,8 +96,12 @@ export default async function ClientsPage() {
                       <>
                         <span className="hidden text-sm text-zinc-600 md:block">
                           {shortRange({ start: latest.periodStart, end: latest.periodEnd }, latest.timezone)}
-                          {isInProgress({ start: latest.periodStart, end: latest.periodEnd }) ? (
-                            <span className={`${pill} ml-2 bg-amber-50 text-amber-700`}>In progress</span>
+                          {isPartial(
+                            { start: latest.periodStart, end: latest.periodEnd },
+                            latest.generatedAt,
+                            latest.timezone,
+                          ) ? (
+                            <PartialWeek className="ml-2" />
                           ) : null}
                           <span className="block text-xs text-zinc-400">
                             {latest.totals.posts} {latest.totals.posts === 1 ? "post" : "posts"}

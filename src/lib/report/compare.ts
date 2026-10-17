@@ -1,6 +1,6 @@
 import { TZDate } from "@date-fns/tz";
 import { addDays, subDays } from "date-fns";
-import { isCalendarWeek } from "@/lib/period";
+import { isCalendarWeek, localDate } from "@/lib/period";
 import type { ReportTotals } from "@/lib/report/build";
 
 export type Metric = "impressions" | "reactions" | "comments" | "reposts" | "dms";
@@ -15,14 +15,17 @@ export function change(current: number, previous: number | null | undefined): nu
   return (current - previous) / previous;
 }
 
-type WeekRow = { periodStart: Date; periodEnd: Date; timezone: string; totals: ReportTotals };
+type WeekRow = { periodStart: Date; periodEnd: Date; generatedAt: Date; timezone: string; totals: ReportTotals };
 
-/** Calendar-week reports oldest to newest, one per week, most recent `limit`. */
+/** Calendar-week reports oldest to newest, one per week (the latest built), most recent `limit`. */
 export function weeklySeries<T extends WeekRow>(rows: T[], limit = 8): T[] {
-  const byWeek = new Map<number, T>();
+  // Keyed by local start date, so a week also built under another timezone counts once.
+  const byWeek = new Map<string, T>();
   for (const row of rows) {
     if (!isCalendarWeek({ start: row.periodStart, end: row.periodEnd }, row.timezone)) continue;
-    byWeek.set(row.periodStart.getTime(), row);
+    const week = localDate(row.periodStart, row.timezone);
+    const current = byWeek.get(week);
+    if (!current || row.generatedAt > current.generatedAt) byWeek.set(week, row);
   }
   return [...byWeek.values()].sort((a, b) => a.periodStart.getTime() - b.periodStart.getTime()).slice(-limit);
 }

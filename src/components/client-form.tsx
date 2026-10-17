@@ -3,17 +3,27 @@
 import { Plus, UserPlus, X } from "lucide-react";
 import { useActionState, useState } from "react";
 import { createClient, updateClient } from "@/app/actions";
+import { Avatar } from "@/components/avatar";
 import { FormMessage, SubmitButton } from "@/components/form-status";
 import { input, label } from "@/components/ui";
 
-type SavedProfile = { id: string; name: string; linkedinUrl: string; apiKeyLast4: string };
+type SavedProfile = { id: string; name: string; linkedinUrl: string; apiKeyLast4: string; photo: string | null };
 
 type Props = { mode: "create" } | { mode: "edit"; client: { id: string; name: string; profiles: SavedProfile[] } };
 
-type Row = { key: string; id: string; name: string; linkedinUrl: string; apiKey: string; apiKeyLast4?: string };
+type Row = {
+  key: string;
+  id: string;
+  name: string;
+  linkedinUrl: string;
+  apiKey: string;
+  photoLink: string;
+  apiKeyLast4?: string;
+  photo?: string | null;
+};
 
 let nextKey = 0;
-const blankRow = (): Row => ({ key: `new-${nextKey++}`, id: "", name: "", linkedinUrl: "", apiKey: "" });
+const blankRow = (): Row => ({ key: `new-${nextKey++}`, id: "", name: "", linkedinUrl: "", apiKey: "", photoLink: "" });
 
 /** "Alex & Sam", "Alex, Sam & Jo" */
 function joinNames(names: string[]) {
@@ -28,7 +38,9 @@ function savedRows(client: { name: string; profiles: SavedProfile[] }): Row[] {
     name: client.profiles.length > 1 ? profile.name : client.name,
     linkedinUrl: profile.linkedinUrl,
     apiKey: "",
+    photoLink: "",
     apiKeyLast4: profile.apiKeyLast4,
+    photo: profile.photo,
   }));
 }
 
@@ -93,8 +105,11 @@ export function ClientForm(props: Props) {
                 />
               </div>
               <div>
-                <label htmlFor={id("key")} className={label}>
+                <label htmlFor={id("key")} className={`${label} flex items-center justify-between gap-2`}>
                   LeadShark API key
+                  {row.apiKeyLast4 ? (
+                    <span className="font-normal text-zinc-400">Saved key ends in {row.apiKeyLast4}</span>
+                  ) : null}
                 </label>
                 <input
                   id={id("key")}
@@ -104,9 +119,7 @@ export function ClientForm(props: Props) {
                   required={!row.apiKeyLast4}
                   value={row.apiKey}
                   onChange={(event) => update(row.key, { apiKey: event.target.value })}
-                  placeholder={
-                    row.apiKeyLast4 ? `Leave blank to keep the key ending in ${row.apiKeyLast4}` : "Paste the key"
-                  }
+                  placeholder={row.apiKeyLast4 ? "Paste a new key to replace it" : "Paste the key"}
                   className={input}
                 />
                 {!row.apiKeyLast4 && !joint ? (
@@ -115,6 +128,30 @@ export function ClientForm(props: Props) {
                   </p>
                 ) : null}
               </div>
+              {client ? (
+                <div>
+                  <label htmlFor={id("photo")} className={label}>
+                    Profile photo
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <Avatar name={row.name || "?"} src={row.photo} />
+                    <input
+                      id={id("photo")}
+                      name="creatorPhoto"
+                      type="url"
+                      autoComplete="off"
+                      value={row.photoLink}
+                      onChange={(event) => update(row.key, { photoLink: event.target.value })}
+                      placeholder={row.photo ? "Paste a photo link to replace it" : "Paste a LinkedIn photo link"}
+                      className={input}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-zinc-500">
+                    Comes from LeadShark when it has one. To set it yourself, open their LinkedIn photo, right-click it
+                    and choose Copy image address.
+                  </p>
+                </div>
+              ) : null}
             </div>
           );
 

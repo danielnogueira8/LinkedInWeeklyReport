@@ -1,23 +1,22 @@
-import { ChevronDown, ChevronRight, ExternalLink, FileText, KeyRound, Settings } from "lucide-react";
+import { ChevronRight, ExternalLink, FileText, Settings } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { deleteClient } from "@/app/actions";
 import { Avatar, avatarSrc, ClientAvatar } from "@/components/avatar";
 import { WeeklyBars } from "@/components/charts";
-import { ClientForm } from "@/components/client-form";
 import { compact, Delta, StatTile } from "@/components/metrics";
 import { EmptyState, PageHeader } from "@/components/page-header";
-import { ConfirmSubmit, GenerateReportForm } from "@/components/report-controls";
-import { card, cardHeader, cardTitle, pill } from "@/components/ui";
+import { PartialWeek } from "@/components/partial-week";
+import { GenerateReportForm } from "@/components/report-controls";
+import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getClient, listReports } from "@/lib/data";
 import {
   currentWeek,
   dayMonth,
   formatTimestamp,
   isCalendarWeek,
-  isInProgress,
+  isPartial,
   localDate,
   periodOptions,
   periodValue,
@@ -88,20 +87,22 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
                   {profile.linkedinUrl.replace(/^https:\/\/www\./, "")}
                   <ExternalLink className="size-3" aria-hidden />
                 </a>
-                <span className="inline-flex items-center gap-1">
-                  <KeyRound className="size-3" aria-hidden />
-                  ••••{profile.apiKeyLast4}
-                </span>
               </span>
             ))}
           </span>
         }
         actions={
-          <GenerateReportForm
-            clientId={client.id}
-            options={periodOptions()}
-            defaultValue={periodValue(currentWeek())}
-          />
+          <>
+            <Link href={`/clients/${client.id}/settings`} className={button.secondary}>
+              <Settings aria-hidden />
+              Settings
+            </Link>
+            <GenerateReportForm
+              clientId={client.id}
+              options={periodOptions()}
+              defaultValue={periodValue(currentWeek())}
+            />
+          </>
         }
       />
 
@@ -110,8 +111,8 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
               Week of {dayMonth(latest.periodStart, latest.timezone)}
-              {isInProgress({ start: latest.periodStart, end: latest.periodEnd }) ? (
-                <span className={`${pill} bg-amber-50 text-amber-700`}>In progress</span>
+              {isPartial({ start: latest.periodStart, end: latest.periodEnd }, latest.generatedAt, latest.timezone) ? (
+                <PartialWeek />
               ) : null}
             </h2>
             <Link
@@ -196,9 +197,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
                           {localDate(new Date(report.periodEnd.getTime() - 1), report.timezone).slice(0, 4)}
                         </span>
                         {!calendar ? <span className={`${pill} bg-zinc-100 text-zinc-600`}>Rolling 7 days</span> : null}
-                        {isInProgress(period) ? (
-                          <span className={`${pill} bg-amber-50 text-amber-700`}>In progress</span>
-                        ) : null}
+                        {isPartial(period, report.generatedAt, report.timezone) ? <PartialWeek /> : null}
                         {report.highlightsOverride ? (
                           <span className={`${pill} bg-brand-50 text-brand-700`}>Edited</span>
                         ) : null}
@@ -227,45 +226,6 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
           </ul>
         )}
       </section>
-
-      <details className={`${card} group`}>
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 text-sm font-semibold text-zinc-900 [&::-webkit-details-marker]:hidden">
-          <Settings className="size-4 text-zinc-400" aria-hidden />
-          Client settings
-          <ChevronDown
-            className="ml-auto size-4 text-zinc-400 transition-transform group-open:rotate-180"
-            aria-hidden
-          />
-        </summary>
-        <div className="grid gap-8 border-t border-zinc-100 p-5 md:grid-cols-[minmax(0,1fr)_260px]">
-          <div className="max-w-md">
-            <ClientForm
-              mode="edit"
-              client={{
-                id: client.id,
-                name: client.name,
-                profiles: client.profiles.map(({ id, name, linkedinUrl, apiKeyLast4 }) => ({
-                  id,
-                  name,
-                  linkedinUrl,
-                  apiKeyLast4,
-                })),
-              }}
-            />
-          </div>
-          <div className="md:border-l md:border-zinc-100 md:pl-8">
-            <h3 className="text-sm font-semibold text-zinc-900">Remove client</h3>
-            <p className="mb-4 mt-1 text-sm text-zinc-500">
-              Deletes the client, their {joint ? "keys" : "key"} and all their reports.
-            </p>
-            <ConfirmSubmit
-              action={deleteClient.bind(null, client.id)}
-              label="Delete client"
-              confirmMessage={`Delete ${client.name} and all their reports? This can't be undone.`}
-            />
-          </div>
-        </div>
-      </details>
     </>
   );
 }
