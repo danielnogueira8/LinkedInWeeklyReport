@@ -73,6 +73,8 @@ npm run dev
    - `AGENCY_NAME` (optional): shown in the header and the PDF footer.
 4. Deploy. The `vercel-build` script runs migrations before `next build`, and `vercel.json` registers the Monday cron.
 
+You can deploy before the database exists: the build skips migrations when `DATABASE_URL` isn't set, and pages show a "connect the database" message. Once Neon is connected, redeploy so the tables get created.
+
 > **There's no login.** Anyone with the deployment URL can see clients and reports. Turn on Vercel's Deployment Protection, or add auth before sharing the URL.
 
 ## Project layout
