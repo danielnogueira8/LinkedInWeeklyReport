@@ -1,4 +1,4 @@
-import { extractPostIds, postedAtFromIds, profileHandle } from "@/lib/linkedin";
+import { extractPostIds, handleFromPostUrl, postedAtFromIds, profileHandle } from "@/lib/linkedin";
 
 // REST API reference: https://apex.leadshark.io/docs/api
 // The REST post objects follow Unipile's LinkedIn post shape (share_url,
@@ -23,8 +23,10 @@ export type LeadSharkPost = {
   comments: number;
   reposts: number;
   automationId: string | null;
-  /** Who wrote it (null on reposts, or when LeadShark doesn't say). */
+  /** Who wrote it, from the post's author or its link (the original author, on a repost). */
   author: PostAuthor | null;
+  /** A repost of someone else's post, when LeadShark flags it. */
+  isRepost: boolean;
   /** False when none of the four metrics were present on the post at all. */
   hasEngagement: boolean;
   /** The post's field names, kept only when no metrics were recognised (for the report warning). */
@@ -206,15 +208,16 @@ function parseDate(value: unknown): Date | null {
 // LinkedIn member ids (ACoAA...) can stand in for a profile slug; they aren't comparable to URLs.
 const MEMBER_ID = /^acoa[\w-]{20,}$/i;
 
-function postAuthor(raw: Json): PostAuthor | null {
-  // A repost's author is whoever wrote the original.
-  if (raw.is_repost === true || isObject(raw.reposted_by)) return null;
+function postAuthor(raw: Json, url: string): PostAuthor | null {
   const author = isObject(raw.author) ? raw.author : {};
+  const name = str(author.name).trim();
   const handle = str(author.public_identifier ?? author.publicIdentifier)
     .trim()
     .toLowerCase();
-  if (!handle || MEMBER_ID.test(handle)) return null;
-  return { handle, name: str(author.name).trim() };
+  if (handle && !MEMBER_ID.test(handle)) return { handle, name };
+  // Post links carry the author's handle even when the API leaves the author out.
+  const fromUrl = handleFromPostUrl(url);
+  return fromUrl ? { handle: fromUrl, name } : null;
 }
 
 export function normalizePost(raw: unknown): LeadSharkPost | null {
@@ -246,7 +249,8 @@ export function normalizePost(raw: unknown): LeadSharkPost | null {
     comments: metrics.comments ?? 0,
     reposts: metrics.reposts ?? 0,
     automationId: str(raw.automation_id) || null,
-    author: postAuthor(raw),
+    author: postAuthor(raw, url),
+    isRepost: raw.is_repost === true || isObject(raw.reposted_by),
     hasEngagement,
     ...(hasEngagement ? {} : { fieldNames: fieldNames(raw) }),
   };
@@ -275,27 +279,48 @@ function postsIn(data: unknown): LeadSharkPost[] {
     .filter((post): post is LeadSharkPost => post !== null);
 }
 
+type Creator = { name: string; linkedinUrl: string };
+
+function writtenBy(author: PostAuthor, creator: Creator) {
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  return (
+    author.handle === profileHandle(creator.linkedinUrl) || (author.name !== "" && same(author.name, creator.name))
+  );
+}
+
+/**
+ * The creator's own posts. A creator's feed also carries their reposts of other people's
+ * posts (often their co-creator's, on a joint report), which aren't theirs to count.
+ */
+export function isOwnPost(post: LeadSharkPost, creator: Creator) {
+  return !post.isRepost && (!post.author || writtenBy(post.author, creator));
+}
+
 /** Whose posts these are: the most common author among them, when LeadShark names one. */
 export function feedOwner(posts: LeadSharkPost[]): PostAuthor | null {
   const counts = new Map<string, { author: PostAuthor; posts: number }>();
-  for (const { author } of posts) {
-    if (author) counts.set(author.handle, { author, posts: (counts.get(author.handle)?.posts ?? 0) + 1 });
+  for (const { author, isRepost } of posts) {
+    if (author && !isRepost) {
+      counts.set(author.handle, { author, posts: (counts.get(author.handle)?.posts ?? 0) + 1 });
+    }
   }
   return [...counts.values()].sort((a, b) => b.posts - a.posts)[0]?.author ?? null;
 }
 
-/** The key's owner when it isn't this creator, i.e. a key copied from someone else's account. */
-export function otherKeyOwner(owner: PostAuthor | null, creator: { name: string; linkedinUrl: string }) {
-  if (!owner) return null;
-  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-  const handle = profileHandle(creator.linkedinUrl);
-  if (!handle || same(owner.handle, handle) || (owner.name && same(owner.name, creator.name))) return null;
-  return owner;
+/**
+ * Whose key this really is, when none of its posts are the creator's: a key copied from
+ * someone else's account. Null when any post is theirs, or LeadShark doesn't say.
+ */
+export function otherKeyOwner(posts: LeadSharkPost[], creator: Creator): PostAuthor | null {
+  if (!profileHandle(creator.linkedinUrl)) return null;
+  const authors = posts.flatMap((post) => (post.author && !post.isRepost ? [post.author] : []));
+  if (authors.length === 0 || authors.some((author) => writtenBy(author, creator))) return null;
+  return feedOwner(posts);
 }
 
-/** Checks an API key before it's saved. Returns whose posts it reads, when LeadShark says. */
-export async function verifyApiKey(apiKey: string): Promise<PostAuthor | null> {
-  return feedOwner(postsIn(await request(apiKey, "/api/v1/posts", { limit: SAFE_PAGE_SIZE })));
+/** Checks an API key before it's saved, returning a page of the posts it reads. */
+export async function verifyApiKey(apiKey: string): Promise<LeadSharkPost[]> {
+  return postsIn(await request(apiKey, "/api/v1/posts", { limit: SAFE_PAGE_SIZE }));
 }
 
 export type PostsResult = {
@@ -331,15 +356,24 @@ function nextPage(
   return hasMore ? { page: page + 1 } : null;
 }
 
-/** The key owner's own posts, paging back until we pass `since`. */
-export async function listPostsSince(apiKey: string, since: Date): Promise<PostsResult> {
+/**
+ * The key owner's feed, paging back until their own posts (per `isOwn`) pass `since`.
+ * Reposts don't count for that: a repost's date is the original post's, which can be old.
+ */
+export async function listPostsSince(
+  apiKey: string,
+  since: Date,
+  isOwn: (post: LeadSharkPost) => boolean = (post) => !post.isRepost,
+): Promise<PostsResult> {
   const posts = new Map<string, LeadSharkPost>();
   let limit = POSTS_PAGE_SIZE;
   let params: Record<string, string | number> = {};
   let responseFields: string[] = [];
 
   const result = (complete: boolean): PostsResult => {
-    const dates = [...posts.values()].flatMap((post) => (post.postedAt ? [post.postedAt.getTime()] : []));
+    const dates = [...posts.values()].flatMap((post) =>
+      post.postedAt && isOwn(post) ? [post.postedAt.getTime()] : [],
+    );
     return {
       posts: [...posts.values()],
       complete,
@@ -367,15 +401,13 @@ export async function listPostsSince(apiKey: string, since: Date): Promise<Posts
     const before = posts.size;
     for (const post of batch) posts.set(post.id, post);
 
-    if (batch.some((post) => post.postedAt && post.postedAt < since)) return result(true);
+    if (batch.some((post) => post.postedAt && post.postedAt < since && isOwn(post))) return result(true);
     // The same posts again: LeadShark ignored the paging parameter.
     if (posts.size === before) return result(false);
+    // No way to ask for more. Even a short page may not be the end: LeadShark pages through
+    // the whole activity feed and drops what isn't a post, so 20 asked can come back as 8.
     const next = nextPage(data, params, page);
-    if (!next) {
-      // No way to ask for more. A short page means the feed really ended; a full page, or
-      // exactly 20 (a likely silent cap), means there may be older posts we can't reach.
-      return result(batch.length < limit && batch.length !== SAFE_PAGE_SIZE);
-    }
+    if (!next) return result(false);
     params = next;
   }
   return result(false);

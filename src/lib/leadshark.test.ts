@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  feedOwner,
   findPictureUrl,
   findProfilePicture,
+  isOwnPost,
   LeadSharkError,
   listAutomations,
   listPostsSince,
@@ -201,9 +201,21 @@ describe("listPostsSince paging styles", () => {
     expect(result.complete).toBe(true);
   });
 
-  it("treats a short page with no next page as the end of the feed", async () => {
-    mockFetch([{ items: recent(35) }]);
-    expect((await listPostsSince("key", new Date("2026-10-05T00:00:00Z"))).complete).toBe(true);
+  it("doesn't take a short page for the end of the feed", async () => {
+    // LeadShark pages the whole activity feed and drops non-posts, so pages come back short.
+    mockFetch([{ items: recent(8) }]);
+    expect((await listPostsSince("key", new Date("2026-10-05T00:00:00Z"))).complete).toBe(false);
+  });
+
+  it("keeps paging past a repost of an older post", async () => {
+    const repost = { ...post("2026-09-20T10:00:00Z"), is_repost: true };
+    const calls = mockFetch([
+      { items: [...recent(3), repost], next_cursor: "c1" },
+      { items: [post("2026-10-01T10:00:00Z")] },
+    ]);
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(calls).toHaveLength(2);
+    expect(result.complete).toBe(true);
   });
 
   it("reports how far back it got when it can't page further", async () => {
@@ -269,13 +281,33 @@ describe("key owners", () => {
     ...extra,
   });
 
-  it("reads who wrote a post, but not for reposts or member ids", () => {
+  const clare = { name: "Clare Thompson", linkedinUrl: "https://www.linkedin.com/in/clare-thompson-51140ba5" };
+  const damon = { name: "Damon Millar", linkedinUrl: "https://www.linkedin.com/in/damonmillar" };
+  const linked = (handle: string, extra = {}) => ({
+    post_id: "urn:li:activity:7516785192234024960",
+    share_url: `https://www.linkedin.com/posts/${handle}_some-post-activity-7516785192234024960-zc4X`,
+    ...extra,
+  });
+
+  it("reads who wrote a post from its author, or else its link", () => {
     expect(normalizePost(authored("Clare-Thompson-51140ba5", "Clare Thompson"))?.author).toEqual({
       handle: "clare-thompson-51140ba5",
       name: "Clare Thompson",
     });
-    expect(normalizePost(authored("damonmillar", "Damon Millar", { is_repost: true }))?.author).toBeNull();
+    // The MCP shape has no author, but the link names them.
+    expect(normalizePost(linked("damonmillar"))?.author).toEqual({ handle: "damonmillar", name: "" });
+    // A member id isn't a handle, and with no link there's nothing to compare.
     expect(normalizePost(authored("ACoAAAWtE78B6Hegj7EIoiN07oWE6W7gI95vjyk", "Damon"))?.author).toBeNull();
+    expect(normalizePost(authored("damonmillar", "Damon Millar", { is_repost: true }))?.isRepost).toBe(true);
+  });
+
+  it("counts only the creator's own posts, not reposts of their co-creator's", () => {
+    const feed = [linked("clare-thompson-51140ba5"), linked("damonmillar"), linked("x", { is_repost: true })]
+      .map(normalizePost)
+      .filter((p) => p !== null);
+    expect(feed.map((p) => isOwnPost(p, clare))).toEqual([true, false, false]);
+    // Some of the posts are hers, so the key is hers.
+    expect(otherKeyOwner(feed, clare)).toBeNull();
   });
 
   it("flags a key that reads someone else's posts", async () => {
@@ -288,15 +320,13 @@ describe("key owners", () => {
         ],
       },
     ]);
-    const owner = await verifyApiKey("key");
-    expect(owner).toEqual({ handle: "damonmillar", name: "Damon Millar" });
-    const clare = { name: "Clare Thompson", linkedinUrl: "https://www.linkedin.com/in/clare-thompson-51140ba5" };
-    expect(otherKeyOwner(owner, clare)).toEqual(owner);
-    expect(otherKeyOwner(owner, { name: "Damon", linkedinUrl: "https://www.linkedin.com/in/DamonMillar" })).toBeNull();
+    const posts = await verifyApiKey("key");
+    expect(otherKeyOwner(posts, clare)).toEqual({ handle: "damonmillar", name: "Damon Millar" });
+    expect(otherKeyOwner(posts, damon)).toBeNull();
     // A changed URL with the right person still passes on the name.
-    expect(otherKeyOwner(owner, { name: "Damon Millar", linkedinUrl: "https://www.linkedin.com/in/old" })).toBeNull();
+    expect(otherKeyOwner(posts, { ...damon, linkedinUrl: "https://www.linkedin.com/in/old" })).toBeNull();
     // Nothing to compare: no complaint.
-    expect(otherKeyOwner(feedOwner([]), clare)).toBeNull();
+    expect(otherKeyOwner([], clare)).toBeNull();
   });
 });
 

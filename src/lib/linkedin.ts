@@ -32,6 +32,17 @@ export function postedAtFromIds(...sources: Array<string | null | undefined>): D
   return null;
 }
 
+/** The author's handle in a post link: linkedin.com/posts/<handle>_<text>-activity-<id>-<code>. */
+export function handleFromPostUrl(url: string): string | null {
+  const match = url.match(/linkedin\.com\/posts\/([^/_?#]+)_/i);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]).toLowerCase();
+  } catch {
+    return match[1].toLowerCase();
+  }
+}
+
 /** "alex-olim" from a saved profile URL, lowercased for comparing. */
 export function profileHandle(profileUrl: string): string | null {
   return normalizeProfileUrl(profileUrl)?.split("/in/")[1]?.toLowerCase() || null;
