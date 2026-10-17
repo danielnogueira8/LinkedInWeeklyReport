@@ -1,9 +1,9 @@
 import { extractPostIds, postedAtFromIds } from "@/lib/linkedin";
 
 // REST API reference: https://apex.leadshark.io/docs/api
-// Field names below follow that reference and the LeadShark MCP output. The
-// normalizers accept a few aliases so a renamed field degrades to a fallback
-// instead of silently zeroing a report.
+// The REST post objects follow Unipile's LinkedIn post shape (share_url,
+// impressions_counter, reaction_counter, ...), not the MCP's renamed
+// `engagement` object, so metrics are matched by name pattern across both.
 const DEFAULT_BASE_URL = "https://apex.leadshark.io";
 
 const POSTS_PAGE_SIZE = 20;
@@ -21,6 +21,10 @@ export type LeadSharkPost = {
   comments: number;
   reposts: number;
   automationId: string | null;
+  /** False when none of the four metrics were present on the post at all. */
+  hasEngagement: boolean;
+  /** The post's field names, kept only when no metrics were recognised (for the report warning). */
+  fieldNames?: string[];
 };
 
 export type LeadSharkAutomation = {
@@ -96,17 +100,62 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
 }
 
-/** Reads a count that may arrive as a number, numeric string, or { total }. */
+/** A count that may arrive as a number, numeric string, or { total } / { count }. */
+function numeric(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d+(\.\d+)?$/.test(value.trim())) return Number(value);
+  if (isObject(value)) return numeric(value.total) ?? numeric(value.count);
+  return null;
+}
+
 function count(...candidates: unknown[]): number {
   for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
-    if (isObject(value)) {
-      const nested = count(value.total, value.count);
-      if (nested) return nested;
-    }
+    const n = numeric(value);
+    if (n !== null) return n;
   }
   return 0;
+}
+
+// Where post metrics may be nested, checked before the post's top level.
+const METRIC_CONTAINERS = ["engagement", "stats", "metrics", "counts", "social_counts", "analytics"];
+
+// impressions_counter (Unipile), impressions (MCP), num_impressions, view_count, ...
+const METRIC_PATTERNS = {
+  impressions: /^(num_|total_)?(impression|view)s?(_count|_counter|_total)?$/i,
+  reactions: /^(num_|total_)?(reaction|like)s?(_count|_counter|_total)?$/i,
+  comments: /^(num_|total_)?comments?(_count|_counter|_total)?$/i,
+  reposts: /^(num_|total_)?(repost|reshare|share)s?(_count|_counter|_total)?$/i,
+};
+
+function findMetric(raw: Json, pattern: RegExp): number | null {
+  const sources = [...METRIC_CONTAINERS.map((key) => raw[key]).filter(isObject), raw];
+  for (const source of sources) {
+    for (const [key, value] of Object.entries(source)) {
+      if (!pattern.test(key)) continue;
+      const n = numeric(value);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
+
+function fieldNames(raw: Json): string[] {
+  return Object.entries(raw).flatMap(([key, value]) =>
+    isObject(value) ? [key, ...Object.keys(value).map((child) => `${key}.${child}`)] : [key],
+  );
+}
+
+/** LinkedIn share links carry tracking (utm_*, rcm with a member id); the bare URL works the same. */
+export function cleanPostUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)linkedin\.com$/i.test(parsed.hostname)) return url;
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 function firstArray(data: unknown, keys: string[]): unknown[] {
@@ -137,25 +186,35 @@ function parseDate(value: unknown): Date | null {
 
 export function normalizePost(raw: unknown): LeadSharkPost | null {
   if (!isObject(raw)) return null;
-  const id = str(raw.post_id ?? raw.urn ?? raw.id);
-  const url = str(raw.share_url ?? raw.post_url ?? raw.url);
+  const id = str(raw.post_id ?? raw.social_id ?? raw.urn ?? raw.id);
+  const url = cleanPostUrl(str(raw.share_url ?? raw.post_url ?? raw.url));
   if (!id && !url) return null;
 
-  const engagement = isObject(raw.engagement) ? raw.engagement : isObject(raw.stats) ? raw.stats : {};
   // The id-embedded timestamp is LinkedIn's own; API date fields are a fallback.
   const postedAt =
-    postedAtFromIds(id, url) ?? parseDate(raw.posted_at ?? raw.published_at ?? raw.postedAt ?? raw.created_at);
+    postedAtFromIds(id, url) ??
+    parseDate(raw.posted_at ?? raw.parsed_datetime ?? raw.published_at ?? raw.postedAt ?? raw.created_at);
+
+  const metrics = {
+    impressions: findMetric(raw, METRIC_PATTERNS.impressions),
+    reactions: findMetric(raw, METRIC_PATTERNS.reactions),
+    comments: findMetric(raw, METRIC_PATTERNS.comments),
+    reposts: findMetric(raw, METRIC_PATTERNS.reposts),
+  };
+  const hasEngagement = Object.values(metrics).some((value) => value !== null);
 
   return {
     id: id || url,
     url: url || (id.startsWith("urn:li:") ? `https://www.linkedin.com/feed/update/${id}/` : ""),
     text: str(raw.full_text ?? raw.text ?? raw.text_preview ?? raw.commentary),
     postedAt,
-    impressions: count(engagement.impressions, engagement.views, raw.impressions, raw.num_impressions),
-    reactions: count(engagement.reactions, engagement.likes, raw.reactions, raw.num_likes, raw.num_reactions),
-    comments: count(engagement.comments, raw.comments, raw.num_comments),
-    reposts: count(engagement.reposts, engagement.shares, raw.reposts, raw.num_shares, raw.num_reposts),
+    impressions: metrics.impressions ?? 0,
+    reactions: metrics.reactions ?? 0,
+    comments: metrics.comments ?? 0,
+    reposts: metrics.reposts ?? 0,
     automationId: str(raw.automation_id) || null,
+    hasEngagement,
+    ...(hasEngagement ? {} : { fieldNames: fieldNames(raw) }),
   };
 }
 

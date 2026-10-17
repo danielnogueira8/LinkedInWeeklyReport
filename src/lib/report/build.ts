@@ -90,6 +90,12 @@ export function buildReportData(input: {
   const undatedPosts = posts.filter((post) => !post.postedAt).length;
   const warnings = [...(input.warnings ?? [])];
   if (undatedPosts > 0) warnings.push(`${undatedPosts} post(s) had no readable publish date and were left out.`);
+  const unreadable = inPeriod.find((post) => !post.hasEngagement);
+  if (unreadable && inPeriod.every((post) => !post.hasEngagement)) {
+    warnings.push(
+      `LeadShark sent these posts without engagement numbers this app recognises, so impressions, reactions, comments and reposts show as 0. Fields it sent: ${unreadable.fieldNames?.join(", ") || "none"}.`,
+    );
+  }
 
   return {
     timezone: input.timezone,

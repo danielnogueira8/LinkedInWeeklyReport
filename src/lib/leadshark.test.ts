@@ -53,7 +53,44 @@ describe("linkedin ids", () => {
 });
 
 describe("normalizePost", () => {
-  it("reads the MCP/REST shape", () => {
+  it("reads the REST shape (Unipile-style counters) and strips tracking from the link", () => {
+    const normalized = normalizePost({
+      object: "Post",
+      post_id: "urn:li:activity:7516785192234024960",
+      social_id: "urn:li:activity:7516785192234024960",
+      share_url:
+        "https://www.linkedin.com/posts/daniel-h-n_we-checked-2204-top-posts-for-the-tells-activity-7516785192234024960-zc4X?utm_source=social_share_send&utm_medium=member_desktop_web&rcm=ACoAACFJ0F0BjEsJ1hNtrAZTqY26-iqNYZ0PxUU",
+      date: "1d",
+      parsed_datetime: "2026-10-16T09:00:44.944Z",
+      text: "We checked 2,204 top posts for the tells that make writing sound like AI.",
+      impressions_counter: 554,
+      reaction_counter: 17,
+      comment_counter: 36,
+      repost_counter: 2,
+      is_repost: false,
+      author: { name: "Daniel Nogueira", public_identifier: "daniel-h-n" },
+    });
+    expect(normalized).toMatchObject({
+      impressions: 554,
+      reactions: 17,
+      comments: 36,
+      reposts: 2,
+      hasEngagement: true,
+      url: "https://www.linkedin.com/posts/daniel-h-n_we-checked-2204-top-posts-for-the-tells-activity-7516785192234024960-zc4X",
+    });
+  });
+
+  it("says so when no metric fields are recognisable", () => {
+    const normalized = normalizePost({
+      post_id: "urn:li:activity:7516785192234024960",
+      share_url: "https://www.linkedin.com/posts/x-activity-7516785192234024960-ab",
+      insights: { seen_by: 12 },
+    });
+    expect(normalized).toMatchObject({ impressions: 0, hasEngagement: false });
+    expect(normalized?.fieldNames).toEqual(["post_id", "share_url", "insights", "insights.seen_by"]);
+  });
+
+  it("reads the MCP shape", () => {
     const normalized = normalizePost({
       post_id: "urn:li:activity:7516785192234024960",
       post_url: "https://www.linkedin.com/posts/daniel-h-n_we-checked-activity-7516785192234024960-zc4X",

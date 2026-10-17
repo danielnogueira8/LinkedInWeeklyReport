@@ -204,6 +204,16 @@ describe("weekly report", () => {
     expect(defaultHighlights(noFollowUps)).toContain("- 12 DMs sent.");
   });
 
+  it("warns instead of silently reporting zeros when metrics can't be read", () => {
+    const unreadable = [{ post_id: `urn:li:activity:${idAt("2026-10-07T10:00:00Z")}`, share_url: "", foo: 1 }].map(
+      (raw) => normalizePost(raw)!,
+    );
+    const data = buildReportData({ period, timezone: "UTC", posts: unreadable, automations: [] });
+    expect(data.warnings).toEqual([expect.stringContaining("Fields it sent: post_id, share_url, foo.")]);
+    // Posts with real numbers never trigger it.
+    expect(buildReportData({ period, timezone: "UTC", posts, automations }).warnings).toEqual([]);
+  });
+
   it("splits highlights into paragraphs and bullets", () => {
     expect(parseHighlights("Lead line:\n- one\n\n• two\nclosing")).toEqual([
       { type: "paragraph", text: "Lead line:" },
