@@ -5,14 +5,20 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 const VERSION = "v1";
 const DEV_FALLBACK_SECRET = "local-development-only-secret";
 
+export const ENCRYPTION_KEY_MISSING =
+  "ENCRYPTION_KEY isn't set, so API keys can't be saved. Add it in Vercel under Settings → Environment Variables, then redeploy.";
+
 let warned = false;
+
+/** False in production when ENCRYPTION_KEY is missing (development falls back to a fixed key). */
+export function encryptionReady() {
+  return Boolean(process.env.ENCRYPTION_KEY) || process.env.NODE_ENV !== "production";
+}
 
 function key(): Buffer {
   let secret = process.env.ENCRYPTION_KEY;
   if (!secret) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("ENCRYPTION_KEY is not set. Add it to your environment variables (see .env.example).");
-    }
+    if (process.env.NODE_ENV === "production") throw new Error(ENCRYPTION_KEY_MISSING);
     if (!warned) {
       console.warn("ENCRYPTION_KEY is not set; using an insecure development key.");
       warned = true;

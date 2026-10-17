@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
-import { encrypt } from "@/lib/crypto";
+import { encrypt, ENCRYPTION_KEY_MISSING, encryptionReady } from "@/lib/crypto";
 import { getClient, getReportWithClient } from "@/lib/data";
 import { clients, db, reports, type Client } from "@/lib/db";
 import { LeadSharkError, verifyApiKey } from "@/lib/leadshark";
@@ -25,6 +25,7 @@ function describe(err: unknown) {
   if (err instanceof LeadSharkError) {
     return err.isAuthError ? "LeadShark rejected this API key. Copy it again from LeadShark's settings." : err.message;
   }
+  if (err instanceof Error && err.message === ENCRYPTION_KEY_MISSING) return err.message;
   console.error(err);
   return "Something went wrong. Check the server logs for details.";
 }
@@ -45,6 +46,7 @@ function readClientForm(formData: FormData, { requireKey }: { requireKey: boolea
 }
 
 async function checkKey(apiKey: string, fields: Record<string, string>): Promise<FormState> {
+  if (!encryptionReady()) return { error: ENCRYPTION_KEY_MISSING, fields };
   try {
     await verifyApiKey(apiKey);
   } catch (err) {
