@@ -7,12 +7,15 @@ import pg from "pg";
 
 nextEnv.loadEnvConfig(process.cwd());
 
-if (!process.env.DATABASE_URL) {
+// Neon's integration also sets DATABASE_URL_UNPOOLED; schema changes should skip PgBouncer.
+const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+
+if (!connectionString) {
   console.warn("DATABASE_URL is not set, so migrations were skipped. Connect a database, then redeploy.");
   process.exit(0);
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString });
 try {
   await migrate(drizzle(pool), { migrationsFolder: "drizzle" });
   console.log("Database migrations are up to date.");
