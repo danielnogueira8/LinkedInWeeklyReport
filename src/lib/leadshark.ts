@@ -211,13 +211,17 @@ const MEMBER_ID = /^acoa[\w-]{20,}$/i;
 function postAuthor(raw: Json, url: string): PostAuthor | null {
   const author = isObject(raw.author) ? raw.author : {};
   const name = str(author.name).trim();
-  const handle = str(author.public_identifier ?? author.publicIdentifier)
+  const given = str(author.public_identifier ?? author.publicIdentifier)
     .trim()
     .toLowerCase();
-  if (handle && !MEMBER_ID.test(handle)) return { handle, name };
-  // Post links carry the author's handle even when the API leaves the author out.
+  const field = given && !MEMBER_ID.test(given) ? given : null;
+  // The link names whoever wrote the content, even when the API leaves the author out. On a
+  // repost the author field can be the reposter, so the link wins, and their name only
+  // counts when the two agree.
   const fromUrl = handleFromPostUrl(url);
-  return fromUrl ? { handle: fromUrl, name } : null;
+  const handle = fromUrl ?? field;
+  if (!handle) return null;
+  return { handle, name: !fromUrl || field === fromUrl ? name : "" };
 }
 
 export function normalizePost(raw: unknown): LeadSharkPost | null {
@@ -331,6 +335,10 @@ export type PostsResult = {
   oldest: Date | null;
   /** The last response's top-level fields, to identify LeadShark's real pagination when it stops early. */
   responseFields: string[];
+  /** The fields on the first post LeadShark sent, to see what it says about authors and reposts. */
+  postFields: string[];
+  pages: number;
+  pageSize: number;
 };
 
 /** The parameters for the next page, from whichever pagination style the response uses. */
@@ -369,6 +377,8 @@ export async function listPostsSince(
   let limit = POSTS_PAGE_SIZE;
   let params: Record<string, string | number> = {};
   let responseFields: string[] = [];
+  let postFields: string[] = [];
+  let pages = 0;
 
   const result = (complete: boolean): PostsResult => {
     const dates = [...posts.values()].flatMap((post) =>
@@ -379,6 +389,9 @@ export async function listPostsSince(
       complete,
       oldest: dates.length ? new Date(Math.min(...dates)) : null,
       responseFields,
+      postFields,
+      pages,
+      pageSize: limit,
     };
   };
 
@@ -395,7 +408,10 @@ export async function listPostsSince(
       }
       throw err;
     }
+    pages++;
     responseFields = isObject(data) ? Object.keys(data) : [];
+    const first = firstArray(data, ["items", "posts", "data"])[0];
+    if (!postFields.length && isObject(first)) postFields = fieldNames(first);
     const batch = postsIn(data);
 
     const before = posts.size;

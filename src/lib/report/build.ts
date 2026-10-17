@@ -30,6 +30,35 @@ export type ReportTotals = {
 };
 
 /** Everything a report renders from, stored as a snapshot so it can be re-rendered later. */
+/** One post LeadShark sent for a creator, dated in the period, and whether the report counts it. */
+export type FeedItem = {
+  id: string;
+  url: string;
+  excerpt: string;
+  postedAt: string;
+  /** Who the post's link or author field names. */
+  author: string | null;
+  /** Why it isn't counted for this creator; absent when it is. */
+  leftOut?: string;
+};
+
+/** What LeadShark returned for one creator, kept so a report's numbers can be checked against LinkedIn. */
+export type FeedCheck = {
+  profileId?: string;
+  name: string;
+  /** Everything LeadShark sent, across all pages, before filtering. */
+  returned: number;
+  pages: number;
+  pageSize: number;
+  /** Whether the feed reached back past the start of the period. */
+  reachedStart: boolean;
+  /** The oldest of the creator's own posts that came back. */
+  oldest: string | null;
+  responseFields: string[];
+  postFields: string[];
+  items: FeedItem[];
+};
+
 export type ReportData = {
   timezone: string;
   totals: ReportTotals;
@@ -40,6 +69,8 @@ export type ReportData = {
   warnings: string[];
   /** Per-creator totals. Present only on joint reports (two or more creators). */
   creators?: Array<{ id: string; name: string; totals: ReportTotals }>;
+  /** What LeadShark returned for each creator (reports built before this was added have none). */
+  feeds?: FeedCheck[];
 };
 
 /** One creator's raw LeadShark data. A solo report has one source, a joint report several. */
@@ -47,6 +78,7 @@ export type ReportSource = {
   profile?: { id: string; name: string };
   posts: LeadSharkPost[];
   automations: LeadSharkAutomation[];
+  feed?: FeedCheck;
 };
 
 export function isJoint(data: Pick<ReportData, "creators">) {
@@ -57,7 +89,7 @@ export function dmsOf(post: Pick<ReportPost, "firstDms" | "followUps">) {
   return post.firstDms + post.followUps;
 }
 
-function excerptOf(text: string) {
+export function excerptOf(text: string) {
   const lines = text.split("\n").map((line) => line.trim());
   const firstLine = lines.find(Boolean) ?? "";
   return firstLine.length > 140 ? `${firstLine.slice(0, 139).trimEnd()}…` : firstLine;
@@ -97,13 +129,23 @@ export function buildReportData(
   const posts = sources.flatMap((source) => source.posts);
 
   // A post can show up in two creators' feeds (e.g. a repost); count it once, for the first.
-  const seen = new Set<string>();
+  const countedFor = new Map<string, ReportSource>();
   const inPeriod = sources.flatMap((source) =>
     source.posts
       .filter((post) => post.postedAt && post.postedAt >= period.start && post.postedAt < period.end)
-      .filter((post) => !seen.has(post.id) && seen.add(post.id))
+      .filter((post) => !countedFor.has(post.id) && countedFor.set(post.id, source))
       .map((post) => ({ post, source })),
   );
+  const feeds = sources.flatMap((source) => {
+    if (!source.feed) return [];
+    const items = source.feed.items.map((item) => {
+      const other = countedFor.get(item.id);
+      return item.leftOut || !other || other === source
+        ? item
+        : { ...item, leftOut: `Counted for ${other.profile?.name ?? "another creator"}` };
+    });
+    return [{ ...source.feed, items }];
+  });
 
   const reportPosts: ReportPost[] = inPeriod
     .map(({ post, source }) => {
@@ -153,5 +195,6 @@ export function buildReportData(
     undatedPosts,
     warnings,
     ...(creators ? { creators } : {}),
+    ...(feeds.length ? { feeds } : {}),
   };
 }

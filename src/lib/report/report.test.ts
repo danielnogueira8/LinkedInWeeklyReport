@@ -346,3 +346,41 @@ describe("weekly series", () => {
     expect(series.map((week) => week.totals.impressions)).toEqual([86500, 11689]);
   });
 });
+
+describe("feed check", () => {
+  it("says when a post is counted for the other creator", () => {
+    const post = normalizePost({
+      post_id: "urn:li:activity:7516785192234024960",
+      share_url: "https://www.linkedin.com/posts/damonmillar_x-activity-7516785192234024960-ab",
+      impressions_counter: 10,
+    })!;
+    const period = { start: new Date("2026-10-11T23:00:00Z"), end: new Date("2026-10-18T23:00:00Z") };
+    const item = {
+      id: post.id,
+      url: post.url,
+      excerpt: "",
+      postedAt: post.postedAt!.toISOString(),
+      author: "damonmillar",
+    };
+    const feed = (name: string) => ({
+      name,
+      returned: 1,
+      pages: 1,
+      pageSize: 100,
+      reachedStart: true,
+      oldest: null,
+      responseFields: [],
+      postFields: [],
+      items: [item],
+    });
+    const data = buildReportData({
+      period,
+      timezone: "Europe/Lisbon",
+      sources: [
+        { profile: { id: "d", name: "Damon Millar" }, posts: [post], automations: [], feed: feed("Damon Millar") },
+        { profile: { id: "c", name: "Clare Thompson" }, posts: [post], automations: [], feed: feed("Clare Thompson") },
+      ],
+    });
+    expect(data.feeds?.map((f) => f.items[0].leftOut)).toEqual([undefined, "Counted for Damon Millar"]);
+  });
+});

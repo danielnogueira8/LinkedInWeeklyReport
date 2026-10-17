@@ -1,9 +1,16 @@
 import { refreshStaleAvatars } from "@/lib/avatars";
 import { decrypt } from "@/lib/crypto";
 import { db, reports, type ClientWithProfiles, type Profile, type Report } from "@/lib/db";
-import { isOwnPost, LeadSharkError, listAutomations, listPostsSince, otherKeyOwner } from "@/lib/leadshark";
+import {
+  isOwnPost,
+  LeadSharkError,
+  listAutomations,
+  listPostsSince,
+  otherKeyOwner,
+  type LeadSharkPost,
+} from "@/lib/leadshark";
 import { dayMonth, reportTimezone, weekdayShort, type Period } from "@/lib/period";
-import { buildReportData, type ReportSource } from "@/lib/report/build";
+import { buildReportData, excerptOf, type FeedCheck, type ReportSource } from "@/lib/report/build";
 
 async function fetchSource(
   profile: Profile,
@@ -42,7 +49,33 @@ async function fetchSource(
         `LeadShark only returned ${owner} ${posts.length} most recent posts${back}, so anything earlier in this period may be missing. (LeadShark sent: ${postsResult.responseFields.join(", ") || "no fields"}.)`,
       );
     }
-    return { profile: { id: profile.id, name: profile.name }, posts, automations };
+    const inPeriod = (post: LeadSharkPost) =>
+      post.postedAt !== null && post.postedAt >= period.start && post.postedAt < period.end;
+    const feed: FeedCheck = {
+      profileId: profile.id,
+      name: profile.name,
+      returned: postsResult.posts.length,
+      pages: postsResult.pages,
+      pageSize: postsResult.pageSize,
+      reachedStart: postsResult.complete,
+      oldest: postsResult.oldest?.toISOString() ?? null,
+      responseFields: postsResult.responseFields,
+      postFields: postsResult.postFields,
+      items: postsResult.posts
+        .filter(inPeriod)
+        .sort((a, b) => b.postedAt!.getTime() - a.postedAt!.getTime())
+        .map((post) => ({
+          id: post.id,
+          url: post.url,
+          excerpt: excerptOf(post.text),
+          postedAt: post.postedAt!.toISOString(),
+          author: post.author?.handle ?? null,
+          ...(posts.includes(post)
+            ? {}
+            : { leftOut: post.isRepost ? "Repost" : `By ${post.author?.handle ?? "someone else"}` }),
+        })),
+    };
+    return { profile: { id: profile.id, name: profile.name }, posts, automations, feed };
   } catch (err) {
     // Say whose key failed when there's more than one.
     if (err instanceof LeadSharkError && joint) throw new LeadSharkError(err.message, err.status, profile.name);

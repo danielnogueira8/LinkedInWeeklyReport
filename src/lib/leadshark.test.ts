@@ -299,6 +299,12 @@ describe("key owners", () => {
     // A member id isn't a handle, and with no link there's nothing to compare.
     expect(normalizePost(authored("ACoAAAWtE78B6Hegj7EIoiN07oWE6W7gI95vjyk", "Damon"))?.author).toBeNull();
     expect(normalizePost(authored("damonmillar", "Damon Millar", { is_repost: true }))?.isRepost).toBe(true);
+    // An unflagged repost whose author field is the reposter: the link names who wrote it.
+    const repost = normalizePost(
+      linked("damonmillar", { author: { public_identifier: "clare-thompson-51140ba5", name: "Clare Thompson" } }),
+    );
+    expect(repost?.author).toEqual({ handle: "damonmillar", name: "" });
+    expect(isOwnPost(repost!, clare)).toBe(false);
   });
 
   it("counts only the creator's own posts, not reposts of their co-creator's", () => {

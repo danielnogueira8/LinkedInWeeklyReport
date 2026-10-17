@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteReport } from "@/app/actions";
 import { Avatar, avatarSrc, ClientAvatar } from "@/components/avatar";
+import { FeedCheckPanel } from "@/components/feed-check";
 import { StatTile } from "@/components/metrics";
 import { PageHeader } from "@/components/page-header";
 import { PartialWeek } from "@/components/partial-week";
@@ -328,6 +329,14 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           ) : null}
         </aside>
       </div>
+
+      {data.feeds?.length ? (
+        <FeedCheckPanel
+          feeds={data.feeds}
+          timezone={timezone}
+          profileUrls={new Map(client.profiles.map((profile) => [profile.id, profile.linkedinUrl]))}
+        />
+      ) : null}
 
       <div className="mt-10 flex justify-end">
         <ConfirmSubmit
