@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { decrypt, encrypt } from "@/lib/crypto";
-import { formatPeriod, lastFullWeek, periodOptions, periodValue, resolvePeriod } from "@/lib/period";
+import {
+  currentWeek,
+  formatPeriod,
+  isWeeklyRunHour,
+  lastFullWeek,
+  periodOptions,
+  periodValue,
+  resolvePeriod,
+  weeklyRunLabel,
+} from "@/lib/period";
 
 const saturday = new Date("2026-10-17T12:00:00Z");
 
@@ -30,6 +39,25 @@ describe("periods", () => {
   it("supports a rolling seven days", () => {
     const period = resolvePeriod("last7", saturday, "UTC")!;
     expect(period.end.getTime() - period.start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it("runs the weekly build at Sunday 21:00 Lisbon time through daylight saving", () => {
+    const lisbon = "Europe/Lisbon";
+    // Summer time (UTC+1): the 20:00 UTC cron is the one that lands at 21:xx.
+    expect(isWeeklyRunHour(new Date("2026-10-18T20:05:00Z"), lisbon)).toBe(true);
+    expect(isWeeklyRunHour(new Date("2026-10-18T21:05:00Z"), lisbon)).toBe(false);
+    // 25 Oct 2026 is the switch back to UTC+0, so it's the 21:00 UTC cron from then on.
+    expect(isWeeklyRunHour(new Date("2026-10-25T20:59:00Z"), lisbon)).toBe(false);
+    expect(isWeeklyRunHour(new Date("2026-10-25T21:59:00Z"), lisbon)).toBe(true);
+    // Right hour, wrong day.
+    expect(isWeeklyRunHour(new Date("2026-10-17T20:05:00Z"), lisbon)).toBe(false);
+    expect(weeklyRunLabel(lisbon)).toBe("Sundays at 21:00 Lisbon time");
+  });
+
+  it("reports on the Monday-to-Monday week the Sunday run falls in", () => {
+    const week = currentWeek(new Date("2026-10-18T20:05:00Z"), "Europe/Lisbon");
+    expect(formatPeriod(week, "Europe/Lisbon")).toBe("Mon 12 Oct to Mon 19 Oct 2026");
+    expect(resolvePeriod(periodValue(week, "Europe/Lisbon"), saturday, "Europe/Lisbon")).toEqual(week);
   });
 
   it("shows the start year when the week spans New Year", () => {

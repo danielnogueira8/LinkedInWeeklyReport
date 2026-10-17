@@ -1,8 +1,11 @@
 import { clients, db } from "@/lib/db";
-import { lastFullWeek } from "@/lib/period";
+import { currentWeek, isWeeklyRunHour } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
 
-// Scheduled in vercel.json for Monday mornings. Generates last week's report for every client.
+// Builds this week's report for every client on Sunday at 21:00 report time.
+// vercel.json fires it (via ./[slot]) at 20:00 and 21:00 UTC on Sundays (crons are UTC-only,
+// and the zone's offset shifts with daylight saving); only the run that lands in
+// the right local hour does the work. `?force=1` skips the clock check.
 export const maxDuration = 300;
 
 const CONCURRENCY = 4;
@@ -18,7 +21,13 @@ export async function GET(request: Request) {
     return Response.json({ error: "Unauthorized. Set CRON_SECRET and send it as a Bearer token." }, { status: 401 });
   }
 
-  const period = lastFullWeek();
+  const now = new Date();
+  const force = new URL(request.url).searchParams.get("force") === "1";
+  if (!force && !isWeeklyRunHour(now)) {
+    return Response.json({ skipped: true, reason: "Not the weekly run hour in the report timezone." });
+  }
+
+  const period = currentWeek(now);
   const queue = await db().select().from(clients);
   const results: Array<{ client: string; reportId?: string; error?: string }> = [];
 

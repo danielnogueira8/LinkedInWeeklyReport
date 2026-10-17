@@ -27,7 +27,8 @@ Monday's post (#1) was the clear winner:
 ## How it works
 
 - **Clients**: name, LinkedIn profile URL and LeadShark API key. The key is checked against LeadShark before it's saved, then stored encrypted (AES-256-GCM). Adding a client builds last week's report straight away.
-- **Weekly reports**: a Vercel cron runs every Monday at 07:00 UTC and builds last week's report (Monday to Monday) for every client. You can also generate any of the last 8 weeks, this week so far, or a rolling 7 days from the client page.
+- **Weekly reports**: every Sunday at 21:00 in `REPORT_TIMEZONE` (set it to `Europe/Lisbon`), a Vercel cron builds each client's report for that week (Monday to Monday). Generate or refresh any report by hand whenever you like from the client page: this week, any of the last 8 weeks, or a rolling 7 days. Generating a week that already has a report refreshes it.
+- **Why two crons**: Vercel crons run on UTC and Lisbon moves between UTC+0 and UTC+1, so `vercel.json` schedules Sunday 20:00 and 21:00 UTC and the handler only does the work in the run that lands at 21:xx local time. Changing `REPORT_TIMEZONE` to a zone far from UTC means updating those two UTC hours. `GET /api/cron/weekly?force=1` (with the `CRON_SECRET` bearer token) runs it immediately.
 - **What's counted**: every post the client published in the period, with its engagement as of when the report was generated. DMs come from the LeadShark automation attached to each post: first DMs (`total_dms_sent`) plus follow-ups (`total_follow_ups_sent`). Top posts are ranked by impressions.
 - **Post dates**: read from the LinkedIn post id itself (the id embeds the publish time), so they're accurate whatever date fields the API returns.
 - **"What worked best"**: auto-written from the numbers. Edit it on the report page (e.g. "The Bro teardown (#1) was the clear winner:") and the copy text and PDF both pick it up. "Refresh numbers" keeps your edit.
@@ -69,9 +70,9 @@ npm run dev
 3. Add environment variables:
    - `ENCRYPTION_KEY`: `openssl rand -base64 32`. Keep it stable: changing it makes saved API keys unreadable.
    - `CRON_SECRET`: `openssl rand -base64 32`. Vercel sends it to the cron route automatically.
-   - `REPORT_TIMEZONE`: e.g. `Europe/London`. Decides where weeks start and which weekday a post lands on. Defaults to UTC.
+   - `REPORT_TIMEZONE`: `Europe/Lisbon`. Decides when the Sunday 21:00 run happens, where weeks start and which weekday a post lands on. Defaults to UTC.
    - `AGENCY_NAME` (optional): shown in the header and the PDF footer.
-4. Deploy. The `vercel-build` script runs migrations before `next build`, and `vercel.json` registers the Monday cron.
+4. Deploy. The `vercel-build` script runs migrations before `next build`, and `vercel.json` registers the Sunday crons.
 
 You can deploy before the database exists: the build skips migrations when `DATABASE_URL` isn't set, and pages show a "connect the database" message. Once Neon is connected, redeploy so the tables get created.
 

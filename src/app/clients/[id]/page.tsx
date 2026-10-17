@@ -7,7 +7,7 @@ import { ClientForm } from "@/components/client-form";
 import { ConfirmSubmit, GenerateReportForm } from "@/components/report-controls";
 import { card } from "@/components/ui";
 import { getClient, listReports } from "@/lib/data";
-import { formatPeriod, lastFullWeek, periodOptions, periodValue } from "@/lib/period";
+import { currentWeek, formatPeriod, periodOptions, periodValue } from "@/lib/period";
 import { formatNumber } from "@/lib/report/text";
 
 // Generating a report calls LeadShark from a Server Action on this page.
@@ -48,7 +48,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
         <p className="mb-4 mt-1 text-sm text-zinc-600">
           Covers posts published in the period. Generating the same week again refreshes its numbers.
         </p>
-        <GenerateReportForm clientId={client.id} options={periodOptions()} defaultValue={periodValue(lastFullWeek())} />
+        <GenerateReportForm clientId={client.id} options={periodOptions()} defaultValue={periodValue(currentWeek())} />
       </section>
 
       <section>

@@ -23,6 +23,28 @@ export function lastFullWeek(now = new Date(), tz = reportTimezone()): Period {
   return plain(subDays(end, 7), end);
 }
 
+/** The Monday-to-Monday week containing `now`. */
+export function currentWeek(now = new Date(), tz = reportTimezone()): Period {
+  const start = mondayOf(now, tz);
+  return plain(start, addDays(start, 7));
+}
+
+/** Reports build automatically each Sunday at 21:00 in the report timezone. */
+const WEEKLY_RUN = { weekday: 0, hour: 21 };
+
+/** Vercel crons are UTC and hour-precise, so the cron fires twice and this picks the right hour. */
+export function isWeeklyRunHour(now = new Date(), tz = reportTimezone()) {
+  const local = new TZDate(now, tz);
+  return local.getDay() === WEEKLY_RUN.weekday && local.getHours() === WEEKLY_RUN.hour;
+}
+
+/** "Sundays at 21:00 Lisbon time" */
+export function weeklyRunLabel(tz = reportTimezone()) {
+  const day = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"][WEEKLY_RUN.weekday];
+  const city = tz === "UTC" ? "UTC" : `${tz.split("/").pop()!.replace(/_/g, " ")} time`;
+  return `${day} at ${String(WEEKLY_RUN.hour).padStart(2, "0")}:00 ${city}`;
+}
+
 export type PeriodOption = { value: string; label: string };
 
 /** The calendar date of `date` in the report timezone, as YYYY-MM-DD. */
@@ -40,7 +62,7 @@ export function periodOptions(now = new Date(), tz = reportTimezone(), weeks = 8
   const options: PeriodOption[] = [{ value: "last7", label: "Last 7 days" }];
   for (let i = 0; i <= weeks; i++) {
     const start = subDays(thisMonday, 7 * i);
-    const prefix = i === 0 ? "This week so far" : i === 1 ? "Last week" : null;
+    const prefix = i === 0 ? "This week" : i === 1 ? "Last week" : null;
     const period = { start, end: addDays(start, 7) };
     const range = formatPeriod(period, tz);
     options.push({ value: periodValue(period, tz), label: prefix ? `${prefix} · ${range}` : range });

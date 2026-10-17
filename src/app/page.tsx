@@ -3,7 +3,7 @@ import { connection } from "next/server";
 import { ClientForm } from "@/components/client-form";
 import { card } from "@/components/ui";
 import { listClientsWithLatestReport } from "@/lib/data";
-import { formatPeriod } from "@/lib/period";
+import { formatPeriod, weeklyRunLabel } from "@/lib/period";
 import { formatNumber } from "@/lib/report/text";
 
 export default async function ClientsPage() {
@@ -16,7 +16,7 @@ export default async function ClientsPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-semibold tracking-tight">Clients</h1>
           <p className="mt-1 text-sm text-zinc-600">
-            Last week&apos;s report is built for every client each Monday morning.
+            Every client&apos;s report for the week builds automatically {weeklyRunLabel()}.
           </p>
         </div>
 
