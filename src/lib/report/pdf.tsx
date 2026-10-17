@@ -1,5 +1,5 @@
 import { Document, Font, Link, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
-import { formatPeriod, type Period } from "@/lib/period";
+import { formatPeriod, reportTimezone, type Period } from "@/lib/period";
 import { isJoint, type ReportData } from "@/lib/report/build";
 import {
   creatorStatsLine,
@@ -199,7 +199,7 @@ function ReportDocument({ clientName, period, data, highlights, agencyName, gene
           <Text>{agencyName ? `Prepared by ${pdfSafe(agencyName)}` : ""}</Text>
           <Text>
             Data from LeadShark · generated{" "}
-            {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: timezone }).format(generatedAt)}
+            {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: reportTimezone() }).format(generatedAt)}
           </Text>
         </View>
       </Page>

@@ -29,7 +29,9 @@ export async function GET(request: Request) {
   }
 
   const period = currentWeek(now);
-  const queue = await db().query.clients.findMany({ with: { profiles: { orderBy: [asc(profiles.position)] } } });
+  const queue = await db().query.clients.findMany({
+    with: { profiles: { orderBy: [asc(profiles.position)], columns: { avatar: false } } },
+  });
   const results: Array<{ client: string; reportId?: string; error?: string }> = [];
 
   async function worker() {

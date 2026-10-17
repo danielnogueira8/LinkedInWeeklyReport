@@ -3,9 +3,12 @@
 import { Clock, LayoutGrid, Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Avatar } from "@/components/avatar";
+import { ClientAvatar } from "@/components/avatar";
 
-type Props = { clients: Array<{ id: string; name: string }>; schedule: string };
+type Props = {
+  clients: Array<{ id: string; name: string; creators: Array<{ name: string; src: string | null }> }>;
+  schedule: string;
+};
 
 function navItem(active: boolean) {
   return `flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors [&_svg]:size-4 [&_svg]:shrink-0 ${
@@ -41,7 +44,7 @@ export function SidebarNav({ clients, schedule }: Props) {
             {clients.map((client) => (
               <li key={client.id}>
                 <Link href={`/clients/${client.id}`} className={navItem(activeClient?.id === client.id)}>
-                  <Avatar name={client.name} size="sm" />
+                  <ClientAvatar name={client.name} creators={client.creators} size="sm" />
                   <span className="truncate">{client.name}</span>
                 </Link>
               </li>

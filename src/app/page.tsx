@@ -1,11 +1,12 @@
 import { ChevronRight, Plus, Users } from "lucide-react";
 import Link from "next/link";
-import { connection } from "next/server";
-import { ClientAvatar } from "@/components/avatar";
+import { after, connection } from "next/server";
+import { avatarSrc, ClientAvatar } from "@/components/avatar";
 import { Sparkline } from "@/components/charts";
 import { compact, Delta } from "@/components/metrics";
 import { EmptyState, PageHeader } from "@/components/page-header";
 import { button, card, pill } from "@/components/ui";
+import { refreshAvatarsInBackground } from "@/lib/avatars";
 import { listClientsOverview } from "@/lib/data";
 import { isInProgress, shortRange, weeklyRunLabel } from "@/lib/period";
 import { change, metricValue, weekSlots } from "@/lib/report/compare";
@@ -21,6 +22,7 @@ function handle(url: string) {
 export default async function ClientsPage() {
   await connection();
   const clients = await listClientsOverview();
+  after(refreshAvatarsInBackground);
 
   return (
     <>
@@ -72,7 +74,10 @@ export default async function ClientsPage() {
                     className={`${columns} group px-5 py-3.5 transition-colors hover:bg-zinc-50`}
                   >
                     <span className="flex min-w-0 items-center gap-3">
-                      <ClientAvatar name={client.name} creators={client.profiles} />
+                      <ClientAvatar
+                        name={client.name}
+                        creators={client.profiles.map((profile) => ({ name: profile.name, src: avatarSrc(profile) }))}
+                      />
                       <span className="min-w-0">
                         <span className="flex items-center gap-2">
                           <span className="truncate font-medium text-zinc-900">{client.name}</span>

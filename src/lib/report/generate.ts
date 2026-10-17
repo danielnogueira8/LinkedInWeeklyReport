@@ -1,7 +1,8 @@
+import { refreshStaleAvatars } from "@/lib/avatars";
 import { decrypt } from "@/lib/crypto";
 import { db, reports, type ClientWithProfiles, type Profile, type Report } from "@/lib/db";
 import { LeadSharkError, listAutomations, listPostsSince } from "@/lib/leadshark";
-import { reportTimezone, type Period } from "@/lib/period";
+import { dayMonth, reportTimezone, weekdayShort, type Period } from "@/lib/period";
 import { buildReportData, type ReportSource } from "@/lib/report/build";
 
 async function fetchSource(
@@ -23,8 +24,13 @@ async function fetchSource(
       }),
     ]);
     if (!postsResult.complete) {
+      const tz = reportTimezone();
+      const back = postsResult.oldest
+        ? `, back to ${weekdayShort(postsResult.oldest, tz)} ${dayMonth(postsResult.oldest, tz)}`
+        : "";
+      const owner = joint ? `${profile.name}'s` : "the";
       warnings.push(
-        `LeadShark stopped returning posts${whose} before the start of this period, so older posts may be missing.`,
+        `LeadShark only returned ${owner} ${postsResult.posts.length} most recent posts${back}, so anything earlier in this period may be missing. (LeadShark sent: ${postsResult.responseFields.join(", ") || "no fields"}.)`,
       );
     }
     return { profile: { id: profile.id, name: profile.name }, posts: postsResult.posts, automations };
@@ -39,11 +45,15 @@ async function fetchSource(
 export async function generateReport(client: ClientWithProfiles, period: Period): Promise<Report> {
   const warnings: string[] = [];
   const joint = client.profiles.length > 1;
-  const sources = await Promise.all(
-    [...client.profiles]
-      .sort((a, b) => a.position - b.position)
-      .map((profile) => fetchSource(profile, period, joint, warnings)),
-  );
+  const [sources] = await Promise.all([
+    Promise.all(
+      [...client.profiles]
+        .sort((a, b) => a.position - b.position)
+        .map((profile) => fetchSource(profile, period, joint, warnings)),
+    ),
+    // Photos ride along with the weekly fetch; failures never affect the report.
+    refreshStaleAvatars(client.profiles),
+  ]);
 
   const data = buildReportData({ period, timezone: reportTimezone(), sources, warnings });
 

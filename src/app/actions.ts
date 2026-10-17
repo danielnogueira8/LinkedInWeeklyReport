@@ -3,6 +3,8 @@
 import { and, eq, notInArray } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
+import { refreshAvatarsInBackground } from "@/lib/avatars";
 import { encrypt, ENCRYPTION_KEY_MISSING, encryptionReady } from "@/lib/crypto";
 import { getClient, getReportWithClient } from "@/lib/data";
 import { clients, db, profiles, reports, type ClientWithProfiles } from "@/lib/db";
@@ -157,15 +159,21 @@ export async function updateClient(clientId: string, _prev: FormState, formData:
       const values = { name: creator.name, linkedinUrl: creator.linkedinUrl, position };
       if (creator.id) {
         const key = creator.apiKey ? keyColumns(creator.apiKey) : {};
+        // A different profile means a different photo: clear it so it's fetched again below.
+        const moved =
+          existing.profiles.find((profile) => profile.id === creator.id)?.linkedinUrl !== creator.linkedinUrl;
+        const photo = moved ? { avatar: null, avatarType: null, avatarVersion: null, avatarCheckedAt: null } : {};
         await tx
           .update(profiles)
-          .set({ ...values, ...key })
+          .set({ ...values, ...key, ...photo })
           .where(and(eq(profiles.id, creator.id), eq(profiles.clientId, clientId)));
       } else {
         await tx.insert(profiles).values({ clientId, ...values, ...keyColumns(creator.apiKey) });
       }
     }
   });
+  // New or moved creators have no photo yet; fetch them once the response is sent.
+  after(refreshAvatarsInBackground);
   refresh();
   return { message: "Saved." };
 }

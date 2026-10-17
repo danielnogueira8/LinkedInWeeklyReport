@@ -3,8 +3,20 @@ import { addDays, format, startOfDay, startOfWeek, subDays } from "date-fns";
 
 export type Period = { start: Date; end: Date };
 
+/** The agency's timezone (Lisbon unless REPORT_TIMEZONE says otherwise). */
 export function reportTimezone(): string {
-  return process.env.REPORT_TIMEZONE || "UTC";
+  return process.env.REPORT_TIMEZONE || "Europe/Lisbon";
+}
+
+/** "17 Oct, 19:23" in the agency's timezone, for "numbers as of" and "updated" times. */
+export function formatTimestamp(date: Date, tz = reportTimezone()): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: tz,
+  }).format(date);
 }
 
 /** Monday 00:00 of the week containing `date`, in the report timezone. */

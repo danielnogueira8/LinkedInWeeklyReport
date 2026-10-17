@@ -9,8 +9,14 @@ export function isUuid(value: string) {
   return UUID_PATTERN.test(value);
 }
 
+const withoutAvatar = { avatar: false } as const;
+
 export async function listClientNames() {
-  return db().select({ id: clients.id, name: clients.name }).from(clients).orderBy(asc(clients.name));
+  return db().query.clients.findMany({
+    orderBy: [asc(clients.name)],
+    columns: { id: true, name: true },
+    with: { profiles: { orderBy: [asc(profiles.position)], columns: { id: true, name: true, avatarVersion: true } } },
+  });
 }
 
 /** Clients with their recent calendar-week totals, for the overview table. */
@@ -18,7 +24,12 @@ export async function listClientsOverview() {
   const [clientRows, reportRows] = await Promise.all([
     db().query.clients.findMany({
       orderBy: [asc(clients.name)],
-      with: { profiles: { orderBy: [asc(profiles.position)], columns: { id: true, name: true, linkedinUrl: true } } },
+      with: {
+        profiles: {
+          orderBy: [asc(profiles.position)],
+          columns: { id: true, name: true, linkedinUrl: true, avatarVersion: true },
+        },
+      },
     }),
     db()
       .select({
@@ -46,7 +57,7 @@ export async function getClient(id: string) {
   return (
     (await db().query.clients.findFirst({
       where: eq(clients.id, id),
-      with: { profiles: { orderBy: [asc(profiles.position)] } },
+      with: { profiles: { orderBy: [asc(profiles.position)], columns: withoutAvatar } },
     })) ?? null
   );
 }
@@ -63,7 +74,7 @@ export async function getReportWithClient(id: string) {
   return (
     (await db().query.reports.findFirst({
       where: eq(reports.id, id),
-      with: { client: { with: { profiles: { orderBy: [asc(profiles.position)] } } } },
+      with: { client: { with: { profiles: { orderBy: [asc(profiles.position)], columns: withoutAvatar } } } },
     })) ?? null
   );
 }

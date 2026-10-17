@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteClient } from "@/app/actions";
-import { ClientAvatar } from "@/components/avatar";
+import { Avatar, avatarSrc, ClientAvatar } from "@/components/avatar";
 import { WeeklyBars } from "@/components/charts";
 import { ClientForm } from "@/components/client-form";
 import { compact, Delta, StatTile } from "@/components/metrics";
@@ -15,6 +15,7 @@ import { getClient, listReports } from "@/lib/data";
 import {
   currentWeek,
   dayMonth,
+  formatTimestamp,
   isCalendarWeek,
   isInProgress,
   localDate,
@@ -50,20 +51,18 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
   const weeks = weeklySeries(reports);
   const latest = weeks.at(-1) ?? null;
   const previous = latest ? previousWeek(weeks, latest) : null;
-  const updated = (date: Date, timezone: string) =>
-    new Intl.DateTimeFormat("en-GB", {
-      day: "numeric",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: timezone,
-    }).format(date);
 
   return (
     <>
       <PageHeader
         crumbs={[{ label: "Clients", href: "/" }, { label: client.name }]}
-        leading={<ClientAvatar name={client.name} creators={client.profiles} size="lg" />}
+        leading={
+          <ClientAvatar
+            name={client.name}
+            creators={client.profiles.map((profile) => ({ name: profile.name, src: avatarSrc(profile) }))}
+            size="lg"
+          />
+        }
         title={client.name}
         description={
           <span className="mt-1 flex flex-col gap-1">
@@ -74,7 +73,12 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
             ) : null}
             {client.profiles.map((profile) => (
               <span key={profile.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                {joint ? <span className="font-medium text-zinc-700">{profile.name}</span> : null}
+                {joint ? (
+                  <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
+                    <Avatar name={profile.name} size="sm" src={avatarSrc(profile)} />
+                    {profile.name}
+                  </span>
+                ) : null}
                 <a
                   href={profile.linkedinUrl}
                   target="_blank"
@@ -201,7 +205,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
                       </span>
                       <span className="block text-xs text-zinc-500">
                         {report.totals.posts} {report.totals.posts === 1 ? "post" : "posts"} · updated{" "}
-                        {updated(report.generatedAt, report.timezone)}
+                        {formatTimestamp(report.generatedAt)}
                       </span>
                     </span>
                     <span className="hidden flex-col items-end gap-1 sm:flex">

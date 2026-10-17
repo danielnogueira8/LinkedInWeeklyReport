@@ -27,7 +27,19 @@ function tone(name: string) {
   return tones[Math.abs(hash) % tones.length];
 }
 
-export function Avatar({ name, size = "md" }: { name: string; size?: keyof typeof sizes }) {
+/** Where a creator's stored photo is served, or null if there isn't one yet. */
+export function avatarSrc(profile: { id: string; avatarVersion: Date | null }) {
+  return profile.avatarVersion ? `/avatars/${profile.id}?v=${profile.avatarVersion.getTime()}` : null;
+}
+
+export function Avatar({ name, size = "md", src }: { name: string; size?: keyof typeof sizes; src?: string | null }) {
+  if (src) {
+    return (
+      // Stored LinkedIn photos served from our own route; next/image would only re-encode them.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={src} alt="" className={`shrink-0 rounded-full bg-zinc-100 object-cover ${sizes[size]}`} />
+    );
+  }
   return (
     <span
       aria-hidden
@@ -45,16 +57,16 @@ export function ClientAvatar({
   size = "md",
 }: {
   name: string;
-  creators: Array<{ name: string }>;
+  creators: Array<{ name: string; src?: string | null }>;
   size?: keyof typeof sizes;
 }) {
-  if (creators.length < 2) return <Avatar name={name} size={size} />;
+  if (creators.length < 2) return <Avatar name={name} size={size} src={creators[0]?.src} />;
   const shown = creators.slice(0, 3);
   return (
     <span className="flex shrink-0 -space-x-2">
       {shown.map((creator, index) => (
         <span key={index} className="rounded-full ring-2 ring-white">
-          <Avatar name={creator.name} size={size === "lg" ? "md" : "sm"} />
+          <Avatar name={creator.name} size={size === "lg" ? "md" : "sm"} src={creator.src} />
         </span>
       ))}
     </span>

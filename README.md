@@ -27,10 +27,11 @@ Monday's post (#1) was the clear winner:
 ## How it works
 
 - **Clients**: name, LinkedIn profile URL and LeadShark API key. Add two or more creators (each with their own profile and key) to make a **joint report**: totals are combined, a "By creator" breakdown is added, and each top post says who wrote it. Creators can be added or removed later from the client's settings. The key is checked against LeadShark before it's saved, then stored encrypted (AES-256-GCM). Adding a client builds last week's report straight away.
-- **Weekly reports**: every Sunday at 21:00 in `REPORT_TIMEZONE` (set it to `Europe/Lisbon`), a Vercel cron builds each client's report for that week (Monday to Monday). Generate or refresh any report by hand whenever you like from the client page: this week, any of the last 8 weeks, or a rolling 7 days. Generating a week that already has a report refreshes it.
+- **Weekly reports**: every Sunday at 21:00 in `REPORT_TIMEZONE` (Lisbon by default), a Vercel cron builds each client's report for that week (Monday to Monday). Generate or refresh any report by hand whenever you like from the client page: this week, any of the last 8 weeks, or a rolling 7 days. Generating a week that already has a report refreshes it.
 - **Why two crons**: Vercel crons run on UTC and Lisbon moves between UTC+0 and UTC+1, so `vercel.json` schedules Sunday 20:00 and 21:00 UTC and the handler only does the work in the run that lands at 21:xx local time. Changing `REPORT_TIMEZONE` to a zone far from UTC means updating those two UTC hours. `GET /api/cron/weekly?force=1` (with the `CRON_SECRET` bearer token) runs it immediately.
 - **What's counted**: every post the client published in the period, with its engagement as of when the report was generated. DMs come from the LeadShark automation attached to each post: first DMs (`total_dms_sent`) plus follow-ups (`total_follow_ups_sent`). Top posts are ranked by impressions.
 - **Post dates**: read from the LinkedIn post id itself (the id embeds the publish time), so they're accurate whatever date fields the API returns.
+- **Profile photos**: each creator's LinkedIn photo comes from LeadShark's enrich lookup, is stored in the database (LinkedIn's image links expire) and served from `/avatars/<id>`. It refreshes about weekly, alongside report builds or in the background after a page view. Each lookup is a real profile view on the creator's account, so it's kept to one a week. If LeadShark has no photo, initials show instead.
 - **"What worked best"**: auto-written from the numbers. Edit it on the report page (e.g. "The Bro teardown (#1) was the clear winner:") and the copy text and PDF both pick it up. "Refresh numbers" keeps your edit.
 - **PDF**: rendered on the server with `@react-pdf/renderer`, with clickable post links.
 
@@ -70,7 +71,7 @@ npm run dev
 3. Add environment variables:
    - `ENCRYPTION_KEY`: `openssl rand -base64 32`. Keep it stable: changing it makes saved API keys unreadable.
    - `CRON_SECRET`: `openssl rand -base64 32`. Vercel sends it to the cron route automatically.
-   - `REPORT_TIMEZONE`: `Europe/Lisbon`. Decides when the Sunday 21:00 run happens, where weeks start and which weekday a post lands on. Defaults to UTC.
+   - `REPORT_TIMEZONE`: `Europe/Lisbon`. Decides when the Sunday 21:00 run happens, where weeks start, which weekday a post lands on and the times shown in the app. Defaults to `Europe/Lisbon`, so it can be left unset.
    - `AGENCY_NAME` (optional): shown in the header and the PDF footer.
 4. Deploy. The `vercel-build` script runs migrations before `next build`, and `vercel.json` registers the Sunday crons.
 

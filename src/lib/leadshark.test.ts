@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LeadSharkError, listAutomations, listPostsSince, normalizePost } from "@/lib/leadshark";
+import {
+  findPictureUrl,
+  findProfilePicture,
+  LeadSharkError,
+  listAutomations,
+  listPostsSince,
+  normalizePost,
+} from "@/lib/leadshark";
 import { extractPostIds, normalizeProfileUrl, timestampFromPostId } from "@/lib/linkedin";
 
 function idAt(iso: string) {
@@ -157,6 +164,85 @@ describe("listPostsSince", () => {
     const error = await listPostsSince("key", new Date()).catch((err) => err);
     expect(error).toBeInstanceOf(LeadSharkError);
     expect(error.isAuthError).toBe(true);
+  });
+});
+
+describe("listPostsSince paging styles", () => {
+  const recent = (count: number, day = 16) =>
+    Array.from({ length: count }, (_, i) => post(`2026-10-${day}T${String(i % 24).padStart(2, "0")}:00:00Z`));
+
+  it("follows page numbers when there's no cursor", async () => {
+    const calls = mockFetch([
+      { items: recent(20), pagination: { page: 1, has_more: true } },
+      { items: [post("2026-10-01T10:00:00Z")], pagination: { page: 2, has_more: false } },
+    ]);
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(calls[1].searchParams.get("page")).toBe("2");
+    expect(result.complete).toBe(true);
+  });
+
+  it("retries at 20 when the bigger page is refused", async () => {
+    const calls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        calls.push(new URL(url));
+        const limit = new URL(url).searchParams.get("limit");
+        return limit === "100"
+          ? new Response(JSON.stringify({ error: "limit must be <= 20" }), { status: 400 })
+          : new Response(JSON.stringify({ items: [post("2026-10-01T10:00:00Z")] }));
+      }),
+    );
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(calls.map((url) => url.searchParams.get("limit"))).toEqual(["100", "20"]);
+    expect(result.complete).toBe(true);
+  });
+
+  it("treats a short page with no next page as the end of the feed", async () => {
+    mockFetch([{ items: recent(35) }]);
+    expect((await listPostsSince("key", new Date("2026-10-05T00:00:00Z"))).complete).toBe(true);
+  });
+
+  it("reports how far back it got when it can't page further", async () => {
+    mockFetch([{ items: recent(20, 12), total: 80 }]);
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(result.complete).toBe(false);
+    expect(result.oldest?.toISOString()).toBe("2026-10-12T00:00:00.000Z");
+    expect(result.responseFields).toEqual(["items", "total"]);
+  });
+
+  it("stops when the paging parameter is ignored", async () => {
+    mockFetch([{ items: recent(100), next_cursor: "same-page-again" }]);
+    const result = await listPostsSince("key", new Date("2026-10-05T00:00:00Z"));
+    expect(result.complete).toBe(false);
+  });
+});
+
+describe("profile photos", () => {
+  it("finds the picture in an enrich-style response", () => {
+    expect(
+      findPictureUrl({ profile: { name: "Daniel", profile_picture_url: "https://media.licdn.com/dms/image/x" } }),
+    ).toBe("https://media.licdn.com/dms/image/x");
+    expect(findPictureUrl({ profile: { name: "Daniel" } })).toBeNull();
+  });
+
+  it("tries the likely enrich endpoints and remembers the one that answers", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init: RequestInit) => {
+        calls.push(`${init.method} ${new URL(url).pathname}`);
+        if (init.method === "POST") return new Response("{}", { status: 404 });
+        return new Response(JSON.stringify({ profile: { profile_picture_url: "https://media.licdn.com/p.jpg" } }));
+      }),
+    );
+    expect(await findProfilePicture("key", "https://www.linkedin.com/in/daniel-h-n")).toBe(
+      "https://media.licdn.com/p.jpg",
+    );
+    expect(await findProfilePicture("key", "https://www.linkedin.com/in/someone")).toBe(
+      "https://media.licdn.com/p.jpg",
+    );
+    expect(calls).toEqual(["POST /api/v1/enrich", "GET /api/v1/enrich", "GET /api/v1/enrich"]);
   });
 });
 

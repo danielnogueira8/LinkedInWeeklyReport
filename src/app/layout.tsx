@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { avatarSrc } from "@/components/avatar";
 import { SidebarNav, SidebarSchedule } from "@/components/sidebar";
 import { listClientNames } from "@/lib/data";
 import { weeklyRunLabel } from "@/lib/period";
@@ -33,9 +34,12 @@ function Brand({ agencyName }: { agencyName?: string }) {
 
 async function SidebarClients() {
   await connection();
-  let clients: Awaited<ReturnType<typeof listClientNames>> = [];
+  let clients: Array<{ id: string; name: string; creators: Array<{ name: string; src: string | null }> }> = [];
   try {
-    clients = await listClientNames();
+    clients = (await listClientNames()).map(({ profiles, ...client }) => ({
+      ...client,
+      creators: profiles.map((profile) => ({ name: profile.name, src: avatarSrc(profile) })),
+    }));
   } catch (err) {
     // Pages show the database error; the sidebar just stays empty.
     console.error("Sidebar couldn't load clients", err);

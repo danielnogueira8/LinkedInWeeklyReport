@@ -3,13 +3,13 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteReport } from "@/app/actions";
-import { Avatar, ClientAvatar } from "@/components/avatar";
+import { Avatar, avatarSrc, ClientAvatar } from "@/components/avatar";
 import { StatTile } from "@/components/metrics";
 import { PageHeader } from "@/components/page-header";
 import { ConfirmSubmit, CopyButton, HighlightsEditor, RegenerateButton } from "@/components/report-controls";
 import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getPreviousReport, getReportWithClient } from "@/lib/data";
-import { dayMonth, isCalendarWeek, isInProgress, shortRange, weekdayShort } from "@/lib/period";
+import { dayMonth, formatTimestamp, isCalendarWeek, isInProgress, shortRange, weekdayShort } from "@/lib/period";
 import { dmsOf, isJoint, type ReportData, type ReportPost } from "@/lib/report/build";
 import { change, metricValue, type Metric } from "@/lib/report/compare";
 import { formatNumber, highlightsFor, plural, renderReportText, topPosts } from "@/lib/report/text";
@@ -58,7 +58,7 @@ function PostMetrics({ post }: { post: ReportPost }) {
 }
 
 /** Joint reports: each creator's share of the week. */
-function CreatorBreakdown({ data }: { data: ReportData }) {
+function CreatorBreakdown({ data, photos }: { data: ReportData; photos: Map<string, string | null> }) {
   const total = data.totals.impressions;
   return (
     <section className={card}>
@@ -76,7 +76,7 @@ function CreatorBreakdown({ data }: { data: ReportData }) {
               className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 px-5 py-3.5 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_auto]"
             >
               <span className="flex min-w-0 items-center gap-3">
-                <Avatar name={creator.name} />
+                <Avatar name={creator.name} src={photos.get(creator.id)} />
                 <span className="min-w-0">
                   <span className="block truncate font-medium text-zinc-900">{creator.name}</span>
                   <span className="block text-xs text-zinc-500">{plural(creator.totals.posts, "post")}</span>
@@ -112,6 +112,8 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   const previous = await getPreviousReport(report);
 
   const { data, client } = report;
+  // Current photos by creator id (a removed creator just falls back to initials).
+  const photos = new Map(client.profiles.map((profile) => [profile.id, avatarSrc(profile)]));
   const { timezone, totals } = data;
   const period = { start: report.periodStart, end: report.periodEnd };
   const highlights = highlightsFor(data, report.highlightsOverride);
@@ -121,13 +123,8 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   const title = isCalendarWeek(period, timezone)
     ? `Week of ${dayMonth(period.start, timezone)}`
     : shortRange(period, timezone);
-  const generated = new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: timezone,
-  }).format(report.generatedAt);
+  // Shown in the agency's timezone, whatever timezone the report's weeks were built in.
+  const generated = formatTimestamp(report.generatedAt);
 
   return (
     <>
@@ -137,7 +134,16 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           { label: client.name, href: `/clients/${client.id}` },
           { label: title },
         ]}
-        leading={<ClientAvatar name={client.name} creators={data.creators ?? client.profiles} size="lg" />}
+        leading={
+          <ClientAvatar
+            name={client.name}
+            creators={(data.creators ?? client.profiles).map((creator) => ({
+              name: creator.name,
+              src: photos.get(creator.id),
+            }))}
+            size="lg"
+          />
+        }
         title={title}
         description={
           <span className="flex flex-wrap items-center gap-2">
@@ -186,7 +192,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0 space-y-6">
-          {isJoint(data) ? <CreatorBreakdown data={data} /> : null}
+          {isJoint(data) ? <CreatorBreakdown data={data} photos={photos} /> : null}
           <section className={card}>
             <div className={cardHeader}>
               <h2 className={cardTitle}>Top posts</h2>
@@ -209,7 +215,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
                       <p className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                         {post.profileName ? (
                           <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
-                            <Avatar name={post.profileName} size="sm" />
+                            <Avatar name={post.profileName} size="sm" src={photos.get(post.profileId ?? "")} />
                             {post.profileName} ·
                           </span>
                         ) : null}

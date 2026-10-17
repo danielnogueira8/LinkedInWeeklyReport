@@ -1,6 +1,8 @@
 import { relations } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { customType, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { ReportData } from "@/lib/report/build";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
 /** A report recipient. One creator is a solo report; two or more make a joint report. */
 export const clients = pgTable("clients", {
@@ -25,6 +27,13 @@ export const profiles = pgTable(
     apiKeyLast4: text("api_key_last4").notNull(),
     position: integer("position").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** LinkedIn profile photo, stored because LinkedIn's image links expire. Never select it in lists. */
+    avatar: bytea("avatar"),
+    avatarType: text("avatar_type"),
+    /** When the stored photo last changed; part of its URL so browsers can cache it forever. */
+    avatarVersion: timestamp("avatar_version", { withTimezone: true }),
+    /** When we last asked LeadShark for a photo, found or not. */
+    avatarCheckedAt: timestamp("avatar_checked_at", { withTimezone: true }),
   },
   (table) => [index("profiles_client_idx").on(table.clientId, table.position)],
 );
@@ -64,6 +73,7 @@ export const reportsRelations = relations(reports, ({ one }) => ({
 }));
 
 export type Client = typeof clients.$inferSelect;
-export type Profile = typeof profiles.$inferSelect;
+/** A profile without its photo bytes, which is how every query but the avatar route loads it. */
+export type Profile = Omit<typeof profiles.$inferSelect, "avatar">;
 export type ClientWithProfiles = Client & { profiles: Profile[] };
 export type Report = typeof reports.$inferSelect;

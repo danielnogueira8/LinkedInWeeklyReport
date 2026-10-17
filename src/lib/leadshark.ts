@@ -6,7 +6,9 @@ import { extractPostIds, postedAtFromIds } from "@/lib/linkedin";
 // `engagement` object, so metrics are matched by name pattern across both.
 const DEFAULT_BASE_URL = "https://apex.leadshark.io";
 
-const POSTS_PAGE_SIZE = 20;
+const POSTS_PAGE_SIZE = 100;
+// The page size LeadShark's MCP allows; used if it refuses POSTS_PAGE_SIZE.
+const SAFE_PAGE_SIZE = 20;
 const MAX_POST_PAGES = 10;
 const AUTOMATIONS_PAGE_SIZE = 50;
 const MAX_AUTOMATION_PAGES = 20;
@@ -58,7 +60,12 @@ function baseUrl() {
   return process.env.LEADSHARK_API_URL || DEFAULT_BASE_URL;
 }
 
-async function request(apiKey: string, path: string, params: Record<string, string | number | undefined> = {}) {
+async function request(
+  apiKey: string,
+  path: string,
+  params: Record<string, string | number | undefined> = {},
+  body?: Json,
+) {
   const url = new URL(path, baseUrl());
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) url.searchParams.set(key, String(value));
@@ -67,7 +74,13 @@ async function request(apiKey: string, path: string, params: Record<string, stri
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { "x-api-key": apiKey, accept: "application/json" },
+      method: body ? "POST" : "GET",
+      headers: {
+        "x-api-key": apiKey,
+        accept: "application/json",
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
       signal: AbortSignal.timeout(30_000),
     });
@@ -75,10 +88,10 @@ async function request(apiKey: string, path: string, params: Record<string, stri
     throw new LeadSharkError(`Could not reach LeadShark (${(err as Error).message})`, null);
   }
 
-  const body = await res.text();
+  const raw = await res.text();
   let data: unknown = null;
   try {
-    data = body ? JSON.parse(body) : null;
+    data = raw ? JSON.parse(raw) : null;
   } catch {
     // Non-JSON error pages fall through to the status check below.
   }
@@ -242,19 +255,70 @@ export async function verifyApiKey(apiKey: string): Promise<void> {
   await request(apiKey, "/api/v1/posts", { limit: 1 });
 }
 
-/**
- * The key owner's own posts, paging back until we pass `since`.
- * `complete` is false when LeadShark stopped returning posts before reaching `since`.
- */
-export async function listPostsSince(
-  apiKey: string,
-  since: Date,
-): Promise<{ posts: LeadSharkPost[]; complete: boolean }> {
-  const posts = new Map<string, LeadSharkPost>();
-  let cursor: string | undefined;
+export type PostsResult = {
+  posts: LeadSharkPost[];
+  /** False when LeadShark stopped returning posts before reaching `since`. */
+  complete: boolean;
+  /** The oldest publish date among the posts we did get. */
+  oldest: Date | null;
+  /** The last response's top-level fields, to identify LeadShark's real pagination when it stops early. */
+  responseFields: string[];
+};
 
-  for (let page = 0; page < MAX_POST_PAGES; page++) {
-    const data = await request(apiKey, "/api/v1/posts", { limit: POSTS_PAGE_SIZE, cursor });
+/** The parameters for the next page, from whichever pagination style the response uses. */
+function nextPage(
+  data: unknown,
+  current: Record<string, string | number>,
+  page: number,
+): Record<string, string | number> | null {
+  if (!isObject(data)) return null;
+  const containers = [data, data.pagination, data.paging, data.meta].filter(isObject);
+  for (const container of containers) {
+    const cursor = str(
+      container.next_cursor ?? container.nextCursor ?? container.next_page_token ?? container.nextPageToken,
+    );
+    if (cursor && cursor !== current.cursor) return { cursor };
+  }
+  const hasMore = containers.some(
+    (container) =>
+      container.has_more === true ||
+      container.hasMore === true ||
+      (typeof container.total_pages === "number" && page < container.total_pages),
+  );
+  return hasMore ? { page: page + 1 } : null;
+}
+
+/** The key owner's own posts, paging back until we pass `since`. */
+export async function listPostsSince(apiKey: string, since: Date): Promise<PostsResult> {
+  const posts = new Map<string, LeadSharkPost>();
+  let limit = POSTS_PAGE_SIZE;
+  let params: Record<string, string | number> = {};
+  let responseFields: string[] = [];
+
+  const result = (complete: boolean): PostsResult => {
+    const dates = [...posts.values()].flatMap((post) => (post.postedAt ? [post.postedAt.getTime()] : []));
+    return {
+      posts: [...posts.values()],
+      complete,
+      oldest: dates.length ? new Date(Math.min(...dates)) : null,
+      responseFields,
+    };
+  };
+
+  for (let page = 1; page <= MAX_POST_PAGES; page++) {
+    let data: unknown;
+    try {
+      data = await request(apiKey, "/api/v1/posts", { limit, ...params });
+    } catch (err) {
+      // LeadShark refused the bigger page: retry at the size its MCP uses.
+      if (err instanceof LeadSharkError && err.status === 400 && limit !== SAFE_PAGE_SIZE) {
+        limit = SAFE_PAGE_SIZE;
+        page--;
+        continue;
+      }
+      throw err;
+    }
+    responseFields = isObject(data) ? Object.keys(data) : [];
     const batch = firstArray(data, ["items", "posts", "data"])
       .map(normalizePost)
       .filter((post): post is LeadSharkPost => post !== null);
@@ -262,14 +326,18 @@ export async function listPostsSince(
     const before = posts.size;
     for (const post of batch) posts.set(post.id, post);
 
-    if (batch.some((post) => post.postedAt && post.postedAt < since) || batch.length < POSTS_PAGE_SIZE) {
-      return { posts: [...posts.values()], complete: true };
+    if (batch.some((post) => post.postedAt && post.postedAt < since)) return result(true);
+    // The same posts again: LeadShark ignored the paging parameter.
+    if (posts.size === before) return result(false);
+    const next = nextPage(data, params, page);
+    if (!next) {
+      // No way to ask for more. A short page means the feed really ended; a full page, or
+      // exactly 20 (a likely silent cap), means there may be older posts we can't reach.
+      return result(batch.length < limit && batch.length !== SAFE_PAGE_SIZE);
     }
-    const next = isObject(data) ? str(data.next_cursor ?? data.nextCursor) : "";
-    if (!next || next === cursor || posts.size === before) break;
-    cursor = next;
+    params = next;
   }
-  return { posts: [...posts.values()], complete: false };
+  return result(false);
 }
 
 export async function listAutomations(apiKey: string): Promise<LeadSharkAutomation[]> {
@@ -288,4 +356,49 @@ export async function listAutomations(apiKey: string): Promise<LeadSharkAutomati
     if (!hasMore || batch.length === 0) break;
   }
   return automations;
+}
+
+// Profile photos come from LeadShark's enrich lookup (the MCP's `enrich` returns
+// profile.profile_picture_url). The REST path isn't in the public docs we could
+// reach, so try the likely shapes and remember whichever one answers.
+const ENRICH_ATTEMPTS: Array<{ path: string; post: boolean }> = [
+  { path: "/api/v1/enrich", post: true },
+  { path: "/api/v1/enrich", post: false },
+  { path: "/api/enrich", post: true },
+  { path: "/api/enrich", post: false },
+];
+let workingEnrich: (typeof ENRICH_ATTEMPTS)[number] | null = null;
+
+const PICTURE_KEY = /^(profile_?)?(picture|photo|image|avatar)(_?url)?$/i;
+
+/** The first http(s) URL under a picture-ish key, searching a few levels deep. */
+export function findPictureUrl(data: unknown, depth = 0): string | null {
+  if (!isObject(data) || depth > 3) return null;
+  for (const [key, value] of Object.entries(data)) {
+    if (PICTURE_KEY.test(key) && typeof value === "string" && /^https?:\/\//.test(value)) return value;
+  }
+  for (const value of Object.values(data)) {
+    const nested = findPictureUrl(value, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/** The creator's LinkedIn photo URL via LeadShark, or null when there's none (or no endpoint answered). */
+export async function findProfilePicture(apiKey: string, profileUrl: string): Promise<string | null> {
+  for (const attempt of workingEnrich ? [workingEnrich] : ENRICH_ATTEMPTS) {
+    let data: unknown;
+    try {
+      data = attempt.post
+        ? await request(apiKey, attempt.path, {}, { profile: profileUrl })
+        : await request(apiKey, attempt.path, { profile: profileUrl });
+    } catch (err) {
+      if (err instanceof LeadSharkError && [400, 404, 405].includes(err.status ?? 0) && !workingEnrich) continue;
+      throw err;
+    }
+    workingEnrich = attempt;
+    return findPictureUrl(data);
+  }
+  console.warn("No LeadShark enrich endpoint answered, so profile photos stay as initials.");
+  return null;
 }
