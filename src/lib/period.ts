@@ -19,9 +19,14 @@ export function formatTimestamp(date: Date, tz = reportTimezone()): string {
   }).format(date);
 }
 
-/** Monday 00:00 of the week containing `date`, in the report timezone. */
-function mondayOf(date: Date, tz: string): TZDate {
-  return startOfWeek(new TZDate(date, tz), { weekStartsOn: 1 });
+/** Weeks run Sunday 00:00 to Sunday 00:00 (Sunday to Saturday) in the report timezone. */
+const WEEK_STARTS_ON = 0;
+// Reports built before that ran Monday to Monday.
+const OLD_WEEK_START = 1;
+
+/** Sunday 00:00 of the week containing `date`, in the report timezone. */
+function weekStartOf(date: Date, tz: string): TZDate {
+  return startOfWeek(new TZDate(date, tz), { weekStartsOn: WEEK_STARTS_ON });
 }
 
 // TZDate does the timezone math; callers get plain Dates (TZDate serializes with an offset).
@@ -29,19 +34,19 @@ function plain(start: Date, end: Date): Period {
   return { start: new Date(start.getTime()), end: new Date(end.getTime()) };
 }
 
-/** The last complete Monday-to-Monday week before `now`. */
+/** The last complete Sunday-to-Sunday week before `now`. */
 export function lastFullWeek(now = new Date(), tz = reportTimezone()): Period {
-  const end = mondayOf(now, tz);
+  const end = weekStartOf(now, tz);
   return plain(subDays(end, 7), end);
 }
 
-/** The Monday-to-Monday week containing `now`. */
+/** The Sunday-to-Sunday week containing `now`. */
 export function currentWeek(now = new Date(), tz = reportTimezone()): Period {
-  const start = mondayOf(now, tz);
+  const start = weekStartOf(now, tz);
   return plain(start, addDays(start, 7));
 }
 
-/** Reports build automatically each Sunday at 21:00 in the report timezone. */
+/** Reports build automatically each Sunday at 21:00 in the report timezone, for the week that ended that midnight. */
 const WEEKLY_RUN = { weekday: 0, hour: 21 };
 
 /** Vercel crons are UTC and hour-precise, so the cron fires twice and this picks the right hour. */
@@ -70,10 +75,10 @@ export function periodValue({ start }: Period, tz = reportTimezone()) {
 
 /** Choices for the "generate report" picker, most recent first. */
 export function periodOptions(now = new Date(), tz = reportTimezone(), weeks = 8): PeriodOption[] {
-  const thisMonday = mondayOf(now, tz);
+  const thisWeek = weekStartOf(now, tz);
   const options: PeriodOption[] = [{ value: "last7", label: "Last 7 days" }];
   for (let i = 0; i <= weeks; i++) {
-    const start = subDays(thisMonday, 7 * i);
+    const start = subDays(thisWeek, 7 * i);
     const prefix = i === 0 ? "This week" : i === 1 ? "Last week" : null;
     const period = { start, end: addDays(start, 7) };
     const range = shortRange(period, tz);
@@ -90,7 +95,7 @@ export function resolvePeriod(value: string, now = new Date(), tz = reportTimezo
   const match = value.match(/^week:(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
   const start = startOfDay(new TZDate(Number(match[1]), Number(match[2]) - 1, Number(match[3]), tz));
-  if (start.getDay() !== 1 || start > now) return null;
+  if (start.getDay() !== WEEK_STARTS_ON || start > now) return null;
   return plain(start, addDays(start, 7));
 }
 
@@ -106,7 +111,7 @@ function parts(date: Date, tz: string) {
   return { weekday: get("weekday"), day: get("day"), month: get("month"), year: get("year") };
 }
 
-/** "Mon 6 Oct to Mon 13 Oct 2026" (the start year only shows when it differs). */
+/** "Sun 11 Oct to Sun 18 Oct 2026" (the start year only shows when it differs). */
 export function formatPeriod({ start, end }: Period, tz = reportTimezone()): string {
   const a = parts(start, tz);
   const b = parts(end, tz);
@@ -114,8 +119,8 @@ export function formatPeriod({ start, end }: Period, tz = reportTimezone()): str
   return `${from} to ${b.weekday} ${b.day} ${b.month} ${b.year}`;
 }
 
-/** When the weekly run builds a calendar week's report: its Sunday, 21:00 local. */
-export function weeklyRunAt({ end }: Period, tz = reportTimezone()): Date {
+/** When the weekly run built a Monday-to-Monday week: its last Sunday, 21:00 local. */
+function oldWeeklyRunAt({ end }: Period, tz: string): Date {
   const run = subDays(new TZDate(end, tz), 1);
   run.setHours(WEEKLY_RUN.hour, 0, 0, 0);
   return new Date(run.getTime());
@@ -123,22 +128,32 @@ export function weeklyRunAt({ end }: Period, tz = reportTimezone()): Date {
 
 /**
  * The numbers only cover part of the period: the report was built before it ended. A
- * calendar week counts as complete from its Sunday 21:00 run, the report clients get.
+ * Monday-to-Monday week counts as complete from its last Sunday's 21:00 run, the report
+ * clients got back then.
  */
 export function isPartial(period: Period, generatedAt: Date, tz = reportTimezone()) {
-  const complete = isCalendarWeek(period, tz) ? weeklyRunAt(period, tz) : period.end;
+  const complete = weekStartingOn(OLD_WEEK_START, period, tz) ? oldWeeklyRunAt(period, tz) : period.end;
   return generatedAt.getTime() < complete.getTime();
 }
 
-/** True for Monday-00:00-to-Monday reports (not the rolling "last 7 days" kind). */
-export function isCalendarWeek({ start, end }: Period, tz = reportTimezone()) {
+function weekStartingOn(weekday: number, { start, end }: Period, tz: string) {
   const local = new TZDate(start, tz);
   return (
-    local.getDay() === 1 &&
+    local.getDay() === weekday &&
     local.getHours() === 0 &&
     local.getMinutes() === 0 &&
     addDays(local, 7).getTime() === end.getTime()
   );
+}
+
+/** True for Sunday-00:00-to-Sunday weeks (not the rolling "last 7 days" kind). */
+export function isCalendarWeek(period: Period, tz = reportTimezone()) {
+  return weekStartingOn(WEEK_STARTS_ON, period, tz);
+}
+
+/** A week's report: a calendar week, or a Monday-to-Monday one built before weeks started on Sunday. */
+export function isWeekReport(period: Period, tz = reportTimezone()) {
+  return isCalendarWeek(period, tz) || weekStartingOn(OLD_WEEK_START, period, tz);
 }
 
 /** "12 Oct" */
@@ -146,7 +161,7 @@ export function dayMonth(date: Date, tz = reportTimezone()): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(date);
 }
 
-/** "12–18 Oct" or "28 Sep – 4 Oct": the days a period covers, inclusive. */
+/** "11–17 Oct" or "27 Sep – 3 Oct": the days a period covers, inclusive. */
 export function shortRange({ start, end }: Period, tz = reportTimezone()): string {
   const last = new Date(end.getTime() - 1);
   const a = parts(start, tz);

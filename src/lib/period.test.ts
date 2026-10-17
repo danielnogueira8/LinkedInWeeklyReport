@@ -3,38 +3,42 @@ import { decrypt, encrypt } from "@/lib/crypto";
 import {
   currentWeek,
   formatPeriod,
+  isCalendarWeek,
   isPartial,
+  isWeekReport,
   isWeeklyRunHour,
   lastFullWeek,
   periodOptions,
   periodValue,
   resolvePeriod,
+  shortRange,
   weeklyRunLabel,
-  weeklyRunAt,
 } from "@/lib/period";
 
 const saturday = new Date("2026-10-17T12:00:00Z");
+// Monday 12 to Monday 19 Oct in Lisbon: how weeks ran before they started on Sunday.
+const oldWeek = { start: new Date("2026-10-11T23:00:00Z"), end: new Date("2026-10-18T23:00:00Z") };
 
 describe("periods", () => {
-  it("picks last Monday-to-Monday week in the report timezone", () => {
+  it("picks last Sunday-to-Sunday week in the report timezone", () => {
     const week = lastFullWeek(saturday, "Europe/London");
     // Midnight in London during BST is 23:00 UTC the day before.
-    expect(week.start.toISOString()).toBe("2026-10-04T23:00:00.000Z");
-    expect(week.end.toISOString()).toBe("2026-10-11T23:00:00.000Z");
-    expect(formatPeriod(week, "Europe/London")).toBe("Mon 5 Oct to Mon 12 Oct 2026");
+    expect(week.start.toISOString()).toBe("2026-10-03T23:00:00.000Z");
+    expect(week.end.toISOString()).toBe("2026-10-10T23:00:00.000Z");
+    expect(formatPeriod(week, "Europe/London")).toBe("Sun 4 Oct to Sun 11 Oct 2026");
   });
 
   it("round-trips picker values", () => {
     const week = lastFullWeek(saturday, "Europe/London");
     const value = periodValue(week, "Europe/London");
-    expect(value).toBe("week:2026-10-05");
+    expect(value).toBe("week:2026-10-04");
     expect(resolvePeriod(value, saturday, "Europe/London")).toEqual(week);
     expect(periodOptions(saturday, "Europe/London").map((option) => option.value)).toContain(value);
   });
 
-  it("rejects non-Mondays, future weeks and junk", () => {
-    expect(resolvePeriod("week:2026-10-06", saturday, "UTC")).toBeNull();
-    expect(resolvePeriod("week:2026-10-19", saturday, "UTC")).toBeNull();
+  it("rejects non-Sundays, future weeks and junk", () => {
+    expect(resolvePeriod("week:2026-10-05", saturday, "UTC")).toBeNull();
+    expect(resolvePeriod("week:2026-10-18", saturday, "UTC")).toBeNull();
     expect(resolvePeriod("nope", saturday, "UTC")).toBeNull();
   });
 
@@ -56,32 +60,50 @@ describe("periods", () => {
     expect(weeklyRunLabel(lisbon)).toBe("Sundays at 21:00 Lisbon time");
   });
 
-  it("reports on the Monday-to-Monday week the Sunday run falls in", () => {
-    const week = currentWeek(new Date("2026-10-18T20:05:00Z"), "Europe/Lisbon");
-    expect(formatPeriod(week, "Europe/Lisbon")).toBe("Mon 12 Oct to Mon 19 Oct 2026");
-    expect(resolvePeriod(periodValue(week, "Europe/Lisbon"), saturday, "Europe/Lisbon")).toEqual(week);
+  it("builds the Sunday-to-Sunday week that ended before the Sunday run", () => {
+    const lisbon = "Europe/Lisbon";
+    const week = lastFullWeek(new Date("2026-10-18T20:05:00Z"), lisbon);
+    expect(formatPeriod(week, lisbon)).toBe("Sun 11 Oct to Sun 18 Oct 2026");
+    expect(shortRange(week, lisbon)).toBe("11–17 Oct");
+    // Until that Sunday, it's "this week" in the picker.
+    expect(currentWeek(saturday, lisbon)).toEqual(week);
+    expect(resolvePeriod(periodValue(week, lisbon), saturday, lisbon)).toEqual(week);
   });
 
-  it("treats a week as partial until its Sunday 21:00 build", () => {
+  it("tells week reports, old Monday-to-Monday ones included, from a rolling 7 days", () => {
     const lisbon = "Europe/Lisbon";
     const week = currentWeek(saturday, lisbon);
-    expect(weeklyRunAt(week, lisbon).toISOString()).toBe("2026-10-18T20:00:00.000Z");
+    const rolling = resolvePeriod("last7", saturday, lisbon)!;
+    expect([week, oldWeek, rolling].map((period) => isCalendarWeek(period, lisbon))).toEqual([true, false, false]);
+    expect([week, oldWeek, rolling].map((period) => isWeekReport(period, lisbon))).toEqual([true, true, false]);
+  });
+
+  it("treats a week as partial until it ends", () => {
+    const lisbon = "Europe/Lisbon";
+    const week = currentWeek(saturday, lisbon);
     // Built on Saturday: partial, whenever you look at it.
     expect(isPartial(week, new Date("2026-10-17T18:48:00Z"), lisbon)).toBe(true);
-    // The Sunday run (and anything after) is the full week.
-    expect(isPartial(week, new Date("2026-10-18T20:00:04Z"), lisbon)).toBe(false);
-    // The week Lisbon leaves summer time: its run is 21:00 UTC.
-    const next = currentWeek(new Date("2026-10-21T12:00:00Z"), lisbon);
-    expect(weeklyRunAt(next, lisbon).toISOString()).toBe("2026-10-25T21:00:00.000Z");
+    // From Sunday midnight (and so the Sunday run) it's the full week.
+    expect(isPartial(week, week.end, lisbon)).toBe(false);
     // A rolling 7 days is complete once its end has passed.
     const rolling = resolvePeriod("last7", saturday, lisbon)!;
     expect(isPartial(rolling, rolling.end, lisbon)).toBe(false);
   });
 
+  it("still counts an old Monday-to-Monday week as full from its Sunday 21:00 run", () => {
+    const lisbon = "Europe/Lisbon";
+    expect(isPartial(oldWeek, new Date("2026-10-18T19:59:00Z"), lisbon)).toBe(true);
+    expect(isPartial(oldWeek, new Date("2026-10-18T20:00:04Z"), lisbon)).toBe(false);
+    // The week Lisbon left summer time: its run was 21:00 UTC.
+    const next = { start: oldWeek.end, end: new Date("2026-10-26T00:00:00Z") };
+    expect(isPartial(next, new Date("2026-10-25T20:30:00Z"), lisbon)).toBe(true);
+    expect(isPartial(next, new Date("2026-10-25T21:00:00Z"), lisbon)).toBe(false);
+  });
+
   it("shows the start year when the week spans New Year", () => {
     expect(
-      formatPeriod({ start: new Date("2025-12-29T00:00:00Z"), end: new Date("2026-01-05T00:00:00Z") }, "UTC"),
-    ).toBe("Mon 29 Dec 2025 to Mon 5 Jan 2026");
+      formatPeriod({ start: new Date("2025-12-28T00:00:00Z"), end: new Date("2026-01-04T00:00:00Z") }, "UTC"),
+    ).toBe("Sun 28 Dec 2025 to Sun 4 Jan 2026");
   });
 });
 

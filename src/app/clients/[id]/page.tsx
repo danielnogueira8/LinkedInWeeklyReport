@@ -15,8 +15,8 @@ import {
   currentWeek,
   dayMonth,
   formatTimestamp,
-  isCalendarWeek,
   isPartial,
+  isWeekReport,
   localDate,
   periodOptions,
   periodValue,
@@ -179,7 +179,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
           <ul className="divide-y divide-zinc-100">
             {reports.map((report) => {
               const period = { start: report.periodStart, end: report.periodEnd };
-              const calendar = isCalendarWeek(period, report.timezone);
+              const calendar = isWeekReport(period, report.timezone);
               const before = calendar ? previousWeek(weeks, report) : null;
               return (
                 <li key={report.id}>

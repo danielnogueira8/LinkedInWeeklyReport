@@ -11,7 +11,7 @@ import { PartialWeek } from "@/components/partial-week";
 import { ConfirmSubmit, CopyButton, HighlightsEditor, RegenerateButton } from "@/components/report-controls";
 import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getPreviousReport, getReportWithClient } from "@/lib/data";
-import { dayMonth, formatTimestamp, isCalendarWeek, isPartial, shortRange, weekdayShort } from "@/lib/period";
+import { dayMonth, formatTimestamp, isPartial, isWeekReport, shortRange, weekdayShort } from "@/lib/period";
 import { dmsOf, isJoint, type ReportData, type ReportPost } from "@/lib/report/build";
 import { change, metricValue, type Metric } from "@/lib/report/compare";
 import { formatNumber, highlightsFor, plural, renderReportText, topPosts } from "@/lib/report/text";
@@ -122,7 +122,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   const text = renderReportText({ clientName: client.name, period, data, highlights });
   const top = topPosts(data);
   const partial = isPartial(period, report.generatedAt, timezone);
-  const title = isCalendarWeek(period, timezone)
+  const title = isWeekReport(period, timezone)
     ? `Week of ${dayMonth(period.start, timezone)}`
     : shortRange(period, timezone);
   // Shown in the agency's timezone, whatever timezone the report's weeks were built in.
