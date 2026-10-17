@@ -1,12 +1,21 @@
 "use client";
 
+import { Check, Copy, RefreshCw, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { useActionState, useState } from "react";
 import { createReport, regenerateReport, resetHighlights, saveHighlights } from "@/app/actions";
 import { FormMessage, SubmitButton } from "@/components/form-status";
-import { button, input, label } from "@/components/ui";
+import { button, input, textarea } from "@/components/ui";
 import type { PeriodOption } from "@/lib/period";
 
-export function CopyButton({ text, label: buttonLabel = "Copy text" }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label = "Copy text",
+  variant = "primary",
+}: {
+  text: string;
+  label?: string;
+  variant?: keyof typeof button;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -26,8 +35,9 @@ export function CopyButton({ text, label: buttonLabel = "Copy text" }: { text: s
   }
 
   return (
-    <button type="button" onClick={copy} className={button.primary}>
-      {copied ? "Copied" : buttonLabel}
+    <button type="button" onClick={copy} className={button[variant]}>
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      {copied ? "Copied" : label}
     </button>
   );
 }
@@ -44,8 +54,8 @@ export function GenerateReportForm({
   const [state, formAction] = useActionState(createReport.bind(null, clientId), undefined);
 
   return (
-    <form action={formAction} className="space-y-3">
-      <div className="flex flex-col gap-3 sm:flex-row">
+    <form action={formAction} className="space-y-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <label htmlFor="period" className="sr-only">
           Period
         </label>
@@ -53,7 +63,7 @@ export function GenerateReportForm({
           id="period"
           name="period"
           defaultValue={state?.fields?.period ?? defaultValue}
-          className={`${input} sm:max-w-sm`}
+          className={`${input} sm:w-72`}
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>
@@ -61,7 +71,10 @@ export function GenerateReportForm({
             </option>
           ))}
         </select>
-        <SubmitButton pendingLabel="Pulling from LeadShark…">Generate report</SubmitButton>
+        <SubmitButton pendingLabel="Pulling from LeadShark…">
+          <Sparkles aria-hidden />
+          Generate report
+        </SubmitButton>
       </div>
       <FormMessage state={state} />
     </form>
@@ -73,6 +86,7 @@ export function RegenerateButton({ reportId }: { reportId: string }) {
   return (
     <form action={formAction} className="contents">
       <SubmitButton variant="secondary" pendingLabel="Refreshing…">
+        <RefreshCw aria-hidden />
         Refresh numbers
       </SubmitButton>
       {state?.error ? <FormMessage state={state} /> : null}
@@ -94,33 +108,29 @@ export function HighlightsEditor({
   return (
     <div className="space-y-3">
       <form action={formAction} className="space-y-3">
-        <div className="flex items-center justify-between">
-          <label htmlFor="highlights" className={label}>
-            What worked best
-          </label>
-          <span className="text-xs text-zinc-500">{edited ? "Edited by you" : "Auto-written"}</span>
-        </div>
         <textarea
           // Remount when the saved text changes (e.g. after a reset) so the field shows it.
           key={highlights}
           id="highlights"
           name="highlights"
+          aria-label="What worked best"
           rows={7}
           defaultValue={highlights}
-          className={`${input} font-mono text-[13px] leading-relaxed`}
+          className={`${textarea} text-[13px]`}
         />
-        <p className="text-xs text-zinc-500">
-          Lines starting with &quot;- &quot; become bullets in the PDF. Name the winning post the way your client would,
-          e.g. &quot;The Bro teardown (#1) was the clear winner:&quot;.
+        <p className="text-xs leading-relaxed text-zinc-500">
+          Lines starting with &quot;- &quot; become bullets. Name the winning post the way your client would, e.g.
+          &quot;The Bro teardown (#1) was the clear winner:&quot;.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <SubmitButton pendingLabel="Saving…">Save</SubmitButton>
           <FormMessage state={state} />
         </div>
       </form>
       {edited ? (
         <form action={resetHighlights.bind(null, reportId)}>
-          <SubmitButton variant="ghost" pendingLabel="Resetting…">
+          <SubmitButton variant="ghost" pendingLabel="Resetting…" className="-ml-2">
+            <RotateCcw aria-hidden />
             Reset to auto-written text
           </SubmitButton>
         </form>
@@ -131,12 +141,14 @@ export function HighlightsEditor({
 
 export function ConfirmSubmit({
   action,
-  label: buttonLabel,
+  label,
   confirmMessage,
+  variant = "danger",
 }: {
   action: () => Promise<void>;
   label: string;
   confirmMessage: string;
+  variant?: keyof typeof button;
 }) {
   return (
     <form
@@ -145,8 +157,9 @@ export function ConfirmSubmit({
         if (!window.confirm(confirmMessage)) event.preventDefault();
       }}
     >
-      <SubmitButton variant="danger" pendingLabel="Deleting…">
-        {buttonLabel}
+      <SubmitButton variant={variant} pendingLabel="Deleting…">
+        <Trash2 aria-hidden />
+        {label}
       </SubmitButton>
     </form>
   );

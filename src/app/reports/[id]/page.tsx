@@ -1,14 +1,18 @@
+import { Download, ExternalLink, Eye, MessageCircle, Repeat2, Send, ThumbsUp, TriangleAlert } from "lucide-react";
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteReport } from "@/app/actions";
+import { Avatar } from "@/components/avatar";
+import { StatTile } from "@/components/metrics";
+import { PageHeader } from "@/components/page-header";
 import { ConfirmSubmit, CopyButton, HighlightsEditor, RegenerateButton } from "@/components/report-controls";
-import { button, card } from "@/components/ui";
-import { getReportWithClient } from "@/lib/data";
-import { formatPeriod, weekdayShort } from "@/lib/period";
-import { dmsOf } from "@/lib/report/build";
-import { formatNumber, highlightsFor, renderReportText } from "@/lib/report/text";
+import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
+import { getPreviousReport, getReportWithClient } from "@/lib/data";
+import { dayMonth, isCalendarWeek, isInProgress, shortRange, weekdayShort } from "@/lib/period";
+import { dmsOf, type ReportPost } from "@/lib/report/build";
+import { change, metricValue, type Metric } from "@/lib/report/compare";
+import { formatNumber, highlightsFor, renderReportText, topPosts } from "@/lib/report/text";
 
 // "Refresh numbers" calls LeadShark from a Server Action on this page.
 export const maxDuration = 60;
@@ -20,13 +24,36 @@ export async function generateMetadata({ params }: PageProps<"/reports/[id]">): 
   return { title: report ? `${report.client.name} report` : "Report" };
 }
 
-function Kpi({ label, value, sub }: { label: string; value: number; sub?: string }) {
+const kpis: Array<[label: string, metric: Metric]> = [
+  ["Impressions", "impressions"],
+  ["Reactions", "reactions"],
+  ["Comments", "comments"],
+  ["Reposts", "reposts"],
+  ["DMs sent", "dms"],
+];
+
+function PostMetrics({ post }: { post: ReportPost }) {
+  const items = [
+    { icon: Eye, value: post.impressions, label: "impressions" },
+    { icon: ThumbsUp, value: post.reactions, label: "reactions" },
+    { icon: MessageCircle, value: post.comments, label: "comments" },
+    { icon: Repeat2, value: post.reposts, label: "reposts" },
+    { icon: Send, value: dmsOf(post), label: "DMs" },
+  ];
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{formatNumber(value)}</p>
-      {sub ? <p className="mt-0.5 text-xs text-zinc-500">{sub}</p> : null}
-    </div>
+    <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-600">
+      {items.map((item) => (
+        <li
+          key={item.label}
+          className="inline-flex items-center gap-1.5"
+          title={`${formatNumber(item.value)} ${item.label}`}
+        >
+          <item.icon className="size-3.5 text-zinc-400" aria-hidden />
+          <span className="font-medium text-zinc-900">{formatNumber(item.value)}</span>
+          <span className="sr-only">{item.label}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -35,129 +62,219 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
   await connection();
   const report = await getReportWithClient(id);
   if (!report) notFound();
+  const previous = await getPreviousReport(report);
 
   const { data, client } = report;
+  const { timezone, totals } = data;
   const period = { start: report.periodStart, end: report.periodEnd };
   const highlights = highlightsFor(data, report.highlightsOverride);
   const text = renderReportText({ clientName: client.name, period, data, highlights });
-  const { totals } = data;
+  const top = topPosts(data);
+  const inProgress = isInProgress(period);
+  const title = isCalendarWeek(period, timezone)
+    ? `Week of ${dayMonth(period.start, timezone)}`
+    : shortRange(period, timezone);
   const generated = new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: data.timezone,
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: timezone,
   }).format(report.generatedAt);
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <Link href={`/clients/${client.id}`} className="text-sm text-zinc-500 hover:text-zinc-900">
-            ← {client.name}
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Performance report</h1>
-          <p className="mt-1 text-sm text-zinc-600">
-            {formatPeriod(period, data.timezone)} · numbers as of {generated}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <CopyButton text={text} />
-          <a href={`/reports/${report.id}/pdf`} className={button.secondary}>
-            Download PDF
-          </a>
-          <RegenerateButton reportId={report.id} />
-        </div>
-      </div>
+    <>
+      <PageHeader
+        crumbs={[
+          { label: "Clients", href: "/" },
+          { label: client.name, href: `/clients/${client.id}` },
+          { label: title },
+        ]}
+        leading={<Avatar name={client.name} size="lg" />}
+        title={title}
+        description={
+          <span className="flex flex-wrap items-center gap-2">
+            {client.name} · numbers as of {generated}
+            {inProgress ? <span className={`${pill} bg-amber-50 text-amber-700`}>In progress</span> : null}
+          </span>
+        }
+        actions={
+          <>
+            <CopyButton text={text} />
+            <a href={`/reports/${report.id}/pdf`} className={button.secondary}>
+              <Download aria-hidden />
+              PDF
+            </a>
+            <RegenerateButton reportId={report.id} />
+          </>
+        }
+      />
 
       {data.warnings.length > 0 ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          {data.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
+        <div className="mb-6 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+          <div className="space-y-1">
+            {data.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <Kpi label="Impressions" value={totals.impressions} />
-        <Kpi label="Reactions" value={totals.reactions} />
-        <Kpi label="Comments" value={totals.comments} />
-        <Kpi label="Reposts" value={totals.reposts} />
-        <Kpi
-          label="DMs sent"
-          value={totals.firstDms + totals.followUps}
-          sub={`${formatNumber(totals.firstDms)} first · ${formatNumber(totals.followUps)} follow-ups`}
-        />
+      <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {kpis.map(([label, metric]) => (
+          <StatTile
+            key={metric}
+            label={label}
+            value={metricValue(totals, metric)}
+            delta={previous ? change(metricValue(totals, metric), metricValue(previous.data.totals, metric)) : null}
+            footnote={
+              metric === "dms" && totals.followUps > 0
+                ? `${formatNumber(totals.firstDms)} first · ${formatNumber(totals.followUps)} follow-ups`
+                : undefined
+            }
+          />
+        ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className={card}>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">Copy-ready text</h2>
-            <CopyButton text={text} label="Copy" />
-          </div>
-          <pre className="overflow-auto whitespace-pre-wrap break-words rounded-lg bg-zinc-50 p-4 font-mono text-[13px] leading-relaxed text-zinc-800">
-            {text}
-          </pre>
-        </section>
-        <section className={card}>
-          {data.posts.length > 0 ? (
-            <HighlightsEditor
-              reportId={report.id}
-              highlights={highlights}
-              edited={Boolean(report.highlightsOverride)}
-            />
-          ) : (
-            <p className="text-sm text-zinc-600">No posts in this period, so there&apos;s nothing to highlight.</p>
-          )}
-        </section>
-      </div>
-
-      {data.posts.length > 0 ? (
-        <section>
-          <h2 className="mb-3 font-semibold">All posts in this period ({data.posts.length})</h2>
-          <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Post</th>
-                  <th className="px-4 py-3 text-right font-medium">Impr.</th>
-                  <th className="px-4 py-3 text-right font-medium">React.</th>
-                  <th className="px-4 py-3 text-right font-medium">Comm.</th>
-                  <th className="px-4 py-3 text-right font-medium">Reposts</th>
-                  <th className="px-4 py-3 text-right font-medium">DMs</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {data.posts.map((post, index) => (
-                  <tr key={post.id} className="align-top">
-                    <td className="max-w-md px-4 py-3">
-                      <a href={post.url} target="_blank" rel="noreferrer" className="group block">
-                        <span className="text-xs text-zinc-500">
-                          #{index + 1} · {weekdayShort(new Date(post.postedAt), data.timezone)}
-                          {post.automationRunning ? " · automation running" : ""}
-                        </span>
-                        <span className="block truncate group-hover:underline">{post.excerpt || post.url}</span>
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="min-w-0 space-y-6">
+          <section className={card}>
+            <div className={cardHeader}>
+              <h2 className={cardTitle}>Top posts</h2>
+              <span className="text-xs text-zinc-400">By impressions</span>
+            </div>
+            {top.length === 0 ? (
+              <p className="px-5 py-10 text-center text-sm text-zinc-500">No posts were published in this period.</p>
+            ) : (
+              <ol className="divide-y divide-zinc-100">
+                {top.map((post, index) => (
+                  <li key={post.id} className="flex gap-4 px-5 py-4">
+                    <span
+                      className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+                        index === 0 ? "bg-brand-500 text-white" : "bg-zinc-100 text-zinc-600"
+                      }`}
+                    >
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <p className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                        {weekdayShort(new Date(post.postedAt), timezone)} {dayMonth(new Date(post.postedAt), timezone)}
+                        {post.automationRunning ? (
+                          <span className={`${pill} bg-good-bg text-good`}>Automation running</span>
+                        ) : null}
+                      </p>
+                      <p className="line-clamp-2 text-sm font-medium text-zinc-900">
+                        {post.excerpt || "Untitled post"}
+                      </p>
+                      <PostMetrics post={post} />
+                    </div>
+                    {post.url ? (
+                      <a
+                        href={post.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label="Open on LinkedIn"
+                        className="grid size-8 shrink-0 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+                      >
+                        <ExternalLink className="size-4" aria-hidden />
                       </a>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(post.impressions)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(post.reactions)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(post.comments)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(post.reposts)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(dmsOf(post))}</td>
-                  </tr>
+                    ) : null}
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
+              </ol>
+            )}
+          </section>
 
-      <div className="flex justify-end">
+          {data.posts.length > 0 ? (
+            <section className={`${card} overflow-hidden`}>
+              <div className={cardHeader}>
+                <h2 className={cardTitle}>All posts</h2>
+                <span className="text-xs text-zinc-400">{data.posts.length}</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="text-xs text-zinc-500">
+                    <tr className="border-b border-zinc-100">
+                      <th className="px-5 py-2.5 font-medium">Post</th>
+                      <th className="px-3 py-2.5 text-right font-medium">Impr.</th>
+                      <th className="px-3 py-2.5 text-right font-medium">React.</th>
+                      <th className="px-3 py-2.5 text-right font-medium">Comm.</th>
+                      <th className="px-3 py-2.5 text-right font-medium">Reposts</th>
+                      <th className="px-5 py-2.5 text-right font-medium">DMs</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {data.posts.map((post) => (
+                      <tr key={post.id} className="hover:bg-zinc-50">
+                        <td className="max-w-80 px-5 py-2.5">
+                          <a
+                            href={post.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block truncate hover:underline"
+                          >
+                            <span className="mr-2 text-xs text-zinc-400">
+                              {weekdayShort(new Date(post.postedAt), timezone)}
+                            </span>
+                            {post.excerpt || post.url}
+                          </a>
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(post.impressions)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(post.reactions)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(post.comments)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(post.reposts)}</td>
+                        <td className="px-5 py-2.5 text-right tabular-nums">{formatNumber(dmsOf(post))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+        </div>
+
+        <aside className="order-first space-y-6 lg:order-none">
+          <section className={card}>
+            <div className={cardHeader}>
+              <h2 className={cardTitle}>Ready to send</h2>
+              <CopyButton text={text} label="Copy" variant="secondary" />
+            </div>
+            <pre className="whitespace-pre-wrap break-words px-5 py-4 font-sans text-[13px] leading-relaxed text-zinc-700">
+              {text}
+            </pre>
+          </section>
+
+          {data.posts.length > 0 ? (
+            <section className={card}>
+              <div className={cardHeader}>
+                <h2 className={cardTitle}>What worked best</h2>
+                <span
+                  className={`${pill} ${report.highlightsOverride ? "bg-brand-50 text-brand-700" : "bg-zinc-100 text-zinc-600"}`}
+                >
+                  {report.highlightsOverride ? "Edited by you" : "Auto-written"}
+                </span>
+              </div>
+              <div className="p-5">
+                <HighlightsEditor
+                  reportId={report.id}
+                  highlights={highlights}
+                  edited={Boolean(report.highlightsOverride)}
+                />
+              </div>
+            </section>
+          ) : null}
+        </aside>
+      </div>
+
+      <div className="mt-10 flex justify-end">
         <ConfirmSubmit
           action={deleteReport.bind(null, report.id)}
           label="Delete report"
+          variant="ghost"
           confirmMessage="Delete this report? You can generate it again later."
         />
       </div>
-    </div>
+    </>
   );
 }

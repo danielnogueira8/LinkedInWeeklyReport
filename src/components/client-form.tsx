@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus } from "lucide-react";
 import { useActionState } from "react";
 import { createClient, updateClient } from "@/app/actions";
 import { FormMessage, SubmitButton } from "@/components/form-status";
@@ -16,7 +17,7 @@ export function ClientForm(props: Props) {
   const values = state?.fields;
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={formAction} className="space-y-5">
       <div>
         <label htmlFor="name" className={label}>
           Name
@@ -59,12 +60,13 @@ export function ClientForm(props: Props) {
         />
         {!client ? (
           <p className="mt-1.5 text-xs text-zinc-500">
-            Checked against LeadShark before it&apos;s saved. Stored encrypted.
+            Use the key from your client&apos;s own LeadShark account (Dashboard → Settings).
           </p>
         ) : null}
       </div>
       <FormMessage state={state} />
       <SubmitButton pendingLabel={client ? "Saving…" : "Checking key and building last week's report…"}>
+        {client ? null : <Plus aria-hidden />}
         {client ? "Save changes" : "Add client"}
       </SubmitButton>
     </form>

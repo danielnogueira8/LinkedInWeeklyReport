@@ -1,69 +1,131 @@
+import { ChevronRight, Plus, Users } from "lucide-react";
 import Link from "next/link";
 import { connection } from "next/server";
-import { ClientForm } from "@/components/client-form";
-import { card } from "@/components/ui";
-import { listClientsWithLatestReport } from "@/lib/data";
-import { formatPeriod, weeklyRunLabel } from "@/lib/period";
+import { Avatar } from "@/components/avatar";
+import { Sparkline } from "@/components/charts";
+import { compact, Delta } from "@/components/metrics";
+import { EmptyState, PageHeader } from "@/components/page-header";
+import { button, card, pill } from "@/components/ui";
+import { listClientsOverview } from "@/lib/data";
+import { isInProgress, shortRange, weeklyRunLabel } from "@/lib/period";
+import { change, metricValue, weekSlots } from "@/lib/report/compare";
 import { formatNumber } from "@/lib/report/text";
+
+const columns =
+  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 md:grid-cols-[minmax(0,2fr)_1fr_1fr_0.8fr_0.8fr_auto_auto]";
+
+function handle(url: string) {
+  return url.replace(/^https:\/\/www\.linkedin\.com\//, "");
+}
 
 export default async function ClientsPage() {
   await connection();
-  const clients = await listClientsWithLatestReport();
+  const clients = await listClientsOverview();
 
   return (
-    <div className="grid gap-10 lg:grid-cols-[1fr_360px]">
-      <section>
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Clients</h1>
-          <p className="mt-1 text-sm text-zinc-600">
-            Every client&apos;s report for the week builds automatically {weeklyRunLabel()}.
-          </p>
-        </div>
+    <>
+      <PageHeader
+        title="Clients"
+        description={`Every client's weekly report builds automatically on ${weeklyRunLabel()}. Generate one by hand any time.`}
+        actions={
+          <Link href="/clients/new" className={button.primary}>
+            <Plus aria-hidden />
+            Add client
+          </Link>
+        }
+      />
 
-        {clients.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-600">
-            No clients yet. Add one with their LeadShark API key to build their first report.
+      {clients.length === 0 ? (
+        <EmptyState
+          icon={<Users />}
+          title="No clients yet"
+          action={
+            <Link href="/clients/new" className={button.primary}>
+              <Plus aria-hidden />
+              Add your first client
+            </Link>
+          }
+        >
+          Add a client with their LeadShark API key and their first report builds straight away.
+        </EmptyState>
+      ) : (
+        <div className={`${card} overflow-hidden`}>
+          <div
+            className={`${columns} border-b border-zinc-100 bg-zinc-50/60 px-5 py-2.5 text-xs font-medium text-zinc-500`}
+          >
+            <span>Client</span>
+            <span className="hidden md:block">Latest week</span>
+            <span className="text-right">Impressions</span>
+            <span className="hidden text-right md:block">Comments</span>
+            <span className="hidden text-right md:block">DMs sent</span>
+            <span className="hidden w-16 md:block">Trend</span>
+            <span className="hidden w-4 md:block" />
           </div>
-        ) : (
-          <ul className="divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200 bg-white">
+          <ul className="divide-y divide-zinc-100">
             {clients.map((client) => {
-              const latest = client.latestReport;
+              const { latest, previous } = client;
+              const slots = weekSlots(client.weeks);
               return (
                 <li key={client.id}>
                   <Link
                     href={`/clients/${client.id}`}
-                    className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-zinc-50"
+                    className={`${columns} group px-5 py-3.5 transition-colors hover:bg-zinc-50`}
                   >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{client.name}</p>
-                      <p className="truncate text-sm text-zinc-500">
-                        {client.linkedinUrl.replace(/^https:\/\/www\./, "")}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right text-sm">
-                      {latest ? (
-                        <>
-                          <p className="text-zinc-900">{formatNumber(latest.data.totals.impressions)} impressions</p>
-                          <p className="text-zinc-500">
-                            {formatPeriod({ start: latest.periodStart, end: latest.periodEnd }, latest.data.timezone)}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="text-zinc-500">No reports yet</p>
-                      )}
-                    </div>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <Avatar name={client.name} />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-zinc-900">{client.name}</span>
+                        <span className="block truncate text-xs text-zinc-500">{handle(client.linkedinUrl)}</span>
+                      </span>
+                    </span>
+
+                    {latest ? (
+                      <>
+                        <span className="hidden text-sm text-zinc-600 md:block">
+                          {shortRange({ start: latest.periodStart, end: latest.periodEnd }, latest.timezone)}
+                          {isInProgress({ start: latest.periodStart, end: latest.periodEnd }) ? (
+                            <span className={`${pill} ml-2 bg-amber-50 text-amber-700`}>In progress</span>
+                          ) : null}
+                          <span className="block text-xs text-zinc-400">
+                            {latest.totals.posts} {latest.totals.posts === 1 ? "post" : "posts"}
+                          </span>
+                        </span>
+                        <span className="flex flex-col items-end gap-1">
+                          <span className="font-medium tabular-nums text-zinc-900">
+                            {compact(latest.totals.impressions)}
+                          </span>
+                          <Delta value={change(latest.totals.impressions, previous?.totals.impressions)} />
+                        </span>
+                        <span className="hidden text-right tabular-nums text-zinc-700 md:block">
+                          {formatNumber(latest.totals.comments)}
+                        </span>
+                        <span className="hidden text-right tabular-nums text-zinc-700 md:block">
+                          {formatNumber(metricValue(latest.totals, "dms"))}
+                        </span>
+                        <span className="hidden w-16 md:block">
+                          <Sparkline
+                            label="Weekly impressions"
+                            timezone={latest.timezone}
+                            points={slots.map((slot) => ({ ...slot, value: slot.row?.totals.impressions ?? null }))}
+                          />
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-right text-sm text-zinc-400 md:col-span-5 md:text-left">
+                        No reports yet
+                      </span>
+                    )}
+                    <ChevronRight
+                      className="hidden size-4 text-zinc-300 transition-colors group-hover:text-zinc-500 md:block"
+                      aria-hidden
+                    />
                   </Link>
                 </li>
               );
             })}
           </ul>
-        )}
-      </section>
-
-      <aside className={`${card} h-fit`}>
-        <h2 className="mb-4 font-semibold">Add a client</h2>
-        <ClientForm mode="create" />
-      </aside>
-    </div>
+        </div>
+      )}
+    </>
   );
 }

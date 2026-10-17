@@ -1,10 +1,34 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme {
+  /* One accent, used sparingly: active nav, focus, links, the current bar in a chart. */
+  --color-brand-50: #eef5fc;
+  --color-brand-100: #d8e8f8;
+  --color-brand-200: #b2d1f1;
+  --color-brand-500: #0a66c2;
+  --color-brand-600: #0959aa;
+  --color-brand-700: #084a8d;
+
+  /* Status: delta direction. Always paired with an arrow icon and a signed number. */
+  --color-good: #006300;
+  --color-good-bg: #e8f3e8;
+  --color-bad: #c03232;
+  --color-bad-bg: #fbeaea;
+
+  /* Surfaces */
+  --color-plane: #f7f7f8;
+  --color-chart-muted: #c4c9d1;
 }
 
 body {
-  font-family: var(--font-sans), system-ui, sans-serif;
+  background: var(--color-plane);
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: var(--color-brand-100);
 }

@@ -64,7 +64,7 @@ export function periodOptions(now = new Date(), tz = reportTimezone(), weeks = 8
     const start = subDays(thisMonday, 7 * i);
     const prefix = i === 0 ? "This week" : i === 1 ? "Last week" : null;
     const period = { start, end: addDays(start, 7) };
-    const range = formatPeriod(period, tz);
+    const range = shortRange(period, tz);
     options.push({ value: periodValue(period, tz), label: prefix ? `${prefix} · ${range}` : range });
   }
   return options;
@@ -100,6 +100,35 @@ export function formatPeriod({ start, end }: Period, tz = reportTimezone()): str
   const b = parts(end, tz);
   const from = `${a.weekday} ${a.day} ${a.month}${a.year !== b.year ? ` ${a.year}` : ""}`;
   return `${from} to ${b.weekday} ${b.day} ${b.month} ${b.year}`;
+}
+
+/** The period hasn't finished yet (e.g. this week's report before Sunday night is over). */
+export function isInProgress({ end }: Period) {
+  return end.getTime() > Date.now();
+}
+
+/** True for Monday-00:00-to-Monday reports (not the rolling "last 7 days" kind). */
+export function isCalendarWeek({ start, end }: Period, tz = reportTimezone()) {
+  const local = new TZDate(start, tz);
+  return (
+    local.getDay() === 1 &&
+    local.getHours() === 0 &&
+    local.getMinutes() === 0 &&
+    addDays(local, 7).getTime() === end.getTime()
+  );
+}
+
+/** "12 Oct" */
+export function dayMonth(date: Date, tz = reportTimezone()): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(date);
+}
+
+/** "12–18 Oct" or "28 Sep – 4 Oct": the days a period covers, inclusive. */
+export function shortRange({ start, end }: Period, tz = reportTimezone()): string {
+  const last = new Date(end.getTime() - 1);
+  const a = parts(start, tz);
+  const b = parts(last, tz);
+  return a.month === b.month ? `${a.day}–${b.day} ${b.month}` : `${a.day} ${a.month} – ${b.day} ${b.month}`;
 }
 
 export function weekdayShort(date: Date, tz = reportTimezone()): string {

@@ -1,13 +1,28 @@
+import { ChevronDown, ChevronRight, ExternalLink, FileText, KeyRound, Settings } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { deleteClient } from "@/app/actions";
+import { Avatar } from "@/components/avatar";
+import { WeeklyBars } from "@/components/charts";
 import { ClientForm } from "@/components/client-form";
+import { compact, Delta, StatTile } from "@/components/metrics";
+import { EmptyState, PageHeader } from "@/components/page-header";
 import { ConfirmSubmit, GenerateReportForm } from "@/components/report-controls";
-import { card } from "@/components/ui";
+import { card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getClient, listReports } from "@/lib/data";
-import { currentWeek, formatPeriod, periodOptions, periodValue } from "@/lib/period";
+import {
+  currentWeek,
+  dayMonth,
+  isCalendarWeek,
+  isInProgress,
+  localDate,
+  periodOptions,
+  periodValue,
+  shortRange,
+} from "@/lib/period";
+import { change, metricValue, previousWeek, weekSlots, weeklySeries } from "@/lib/report/compare";
 import { formatNumber } from "@/lib/report/text";
 
 // Generating a report calls LeadShark from a Server Action on this page.
@@ -25,98 +40,211 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
   await connection();
   const client = await getClient(id);
   if (!client) notFound();
-  const reports = await listReports(client.id);
+
+  const reports = (await listReports(client.id)).map((report) => ({
+    ...report,
+    timezone: report.data.timezone,
+    totals: report.data.totals,
+  }));
+  const weeks = weeklySeries(reports);
+  const latest = weeks.at(-1) ?? null;
+  const previous = latest ? previousWeek(weeks, latest) : null;
+  const updated = (date: Date, timezone: string) =>
+    new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: timezone,
+    }).format(date);
 
   return (
-    <div className="space-y-8">
-      <div>
-        <Link href="/" className="text-sm text-zinc-500 hover:text-zinc-900">
-          ← All clients
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{client.name}</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          <a href={client.linkedinUrl} target="_blank" rel="noreferrer" className="hover:text-zinc-900">
-            {client.linkedinUrl.replace(/^https:\/\/www\./, "")}
-          </a>
-          <span className="mx-2">·</span>
-          LeadShark key ••••{client.apiKeyLast4}
-        </p>
-      </div>
+    <>
+      <PageHeader
+        crumbs={[{ label: "Clients", href: "/" }, { label: client.name }]}
+        leading={<Avatar name={client.name} size="lg" />}
+        title={client.name}
+        description={
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <a
+              href={client.linkedinUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 hover:text-zinc-900"
+            >
+              {client.linkedinUrl.replace(/^https:\/\/www\./, "")}
+              <ExternalLink className="size-3" aria-hidden />
+            </a>
+            <span className="inline-flex items-center gap-1">
+              <KeyRound className="size-3" aria-hidden />
+              LeadShark key ••••{client.apiKeyLast4}
+            </span>
+          </span>
+        }
+        actions={
+          <GenerateReportForm
+            clientId={client.id}
+            options={periodOptions()}
+            defaultValue={periodValue(currentWeek())}
+          />
+        }
+      />
 
-      <section className={card}>
-        <h2 className="font-semibold">Generate a report</h2>
-        <p className="mb-4 mt-1 text-sm text-zinc-600">
-          Covers posts published in the period. Generating the same week again refreshes its numbers.
-        </p>
-        <GenerateReportForm clientId={client.id} options={periodOptions()} defaultValue={periodValue(currentWeek())} />
-      </section>
-
-      <section>
-        <h2 className="mb-3 font-semibold">Reports</h2>
-        {reports.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-600">
-            No reports yet.
-          </p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
-                <tr>
-                  <th className="px-5 py-3 font-medium">Period</th>
-                  <th className="px-5 py-3 text-right font-medium">Posts</th>
-                  <th className="px-5 py-3 text-right font-medium">Impressions</th>
-                  <th className="px-5 py-3 text-right font-medium">Comments</th>
-                  <th className="px-5 py-3 text-right font-medium">DMs</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {reports.map((report) => {
-                  const { totals, timezone } = report.data;
-                  return (
-                    <tr key={report.id} className="hover:bg-zinc-50">
-                      <td className="px-5 py-3">
-                        <Link href={`/reports/${report.id}`} className="font-medium hover:underline">
-                          {formatPeriod({ start: report.periodStart, end: report.periodEnd }, timezone)}
-                        </Link>
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums">{totals.posts}</td>
-                      <td className="px-5 py-3 text-right tabular-nums">{formatNumber(totals.impressions)}</td>
-                      <td className="px-5 py-3 text-right tabular-nums">{formatNumber(totals.comments)}</td>
-                      <td className="px-5 py-3 text-right tabular-nums">
-                        {formatNumber(totals.firstDms + totals.followUps)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {latest ? (
+        <section className="mb-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+              Week of {dayMonth(latest.periodStart, latest.timezone)}
+              {isInProgress({ start: latest.periodStart, end: latest.periodEnd }) ? (
+                <span className={`${pill} bg-amber-50 text-amber-700`}>In progress</span>
+              ) : null}
+            </h2>
+            <Link
+              href={`/reports/${latest.id}`}
+              className="inline-flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
+            >
+              Open report
+              <ChevronRight className="size-4" aria-hidden />
+            </Link>
           </div>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+            <div className="grid grid-cols-2 gap-4">
+              {(
+                [
+                  ["Impressions", "impressions"],
+                  ["Reactions", "reactions"],
+                  ["Comments", "comments"],
+                  ["DMs sent", "dms"],
+                ] as const
+              ).map(([label, metric]) => (
+                <StatTile
+                  key={metric}
+                  label={label}
+                  value={metricValue(latest.totals, metric)}
+                  delta={
+                    previous ? change(metricValue(latest.totals, metric), metricValue(previous.totals, metric)) : null
+                  }
+                />
+              ))}
+            </div>
+            <div className={card}>
+              <div className={cardHeader}>
+                <h3 className={cardTitle}>Weekly impressions</h3>
+                <span className="text-xs text-zinc-400">Click a week to open it</span>
+              </div>
+              <div className="px-5 pb-4">
+                <WeeklyBars
+                  unit="impression"
+                  timezone={latest.timezone}
+                  points={weekSlots(weeks).map((slot) => ({
+                    ...slot,
+                    value: slot.row?.totals.impressions ?? null,
+                    href: slot.row ? `/reports/${slot.row.id}` : undefined,
+                  }))}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className={`${card} mb-8 overflow-hidden`}>
+        <div className={cardHeader}>
+          <h2 className={cardTitle}>Reports</h2>
+          <span className="text-xs text-zinc-400">{reports.length}</span>
+        </div>
+        {reports.length === 0 ? (
+          <div className="p-5">
+            <EmptyState icon={<FileText />} title="No reports yet">
+              Pick a week above and generate the first one.
+            </EmptyState>
+          </div>
+        ) : (
+          <ul className="divide-y divide-zinc-100">
+            {reports.map((report) => {
+              const period = { start: report.periodStart, end: report.periodEnd };
+              const calendar = isCalendarWeek(period, report.timezone);
+              const before = calendar ? previousWeek(weeks, report) : null;
+              return (
+                <li key={report.id}>
+                  <Link
+                    href={`/reports/${report.id}`}
+                    className="group flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-zinc-50"
+                  >
+                    <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-zinc-100 text-zinc-500 [&_svg]:size-4">
+                      <FileText aria-hidden />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-zinc-900">
+                          {shortRange(period, report.timezone)}{" "}
+                          {localDate(new Date(report.periodEnd.getTime() - 1), report.timezone).slice(0, 4)}
+                        </span>
+                        {!calendar ? <span className={`${pill} bg-zinc-100 text-zinc-600`}>Rolling 7 days</span> : null}
+                        {isInProgress(period) ? (
+                          <span className={`${pill} bg-amber-50 text-amber-700`}>In progress</span>
+                        ) : null}
+                        {report.highlightsOverride ? (
+                          <span className={`${pill} bg-brand-50 text-brand-700`}>Edited</span>
+                        ) : null}
+                      </span>
+                      <span className="block text-xs text-zinc-500">
+                        {report.totals.posts} {report.totals.posts === 1 ? "post" : "posts"} · updated{" "}
+                        {updated(report.generatedAt, report.timezone)}
+                      </span>
+                    </span>
+                    <span className="hidden flex-col items-end gap-1 sm:flex">
+                      <span className="text-sm font-medium tabular-nums text-zinc-900">
+                        {compact(report.totals.impressions)}
+                        <span className="font-normal text-zinc-400"> impr.</span>
+                      </span>
+                      <Delta value={before ? change(report.totals.impressions, before.totals.impressions) : null} />
+                    </span>
+                    <span className="hidden w-20 text-right text-sm tabular-nums text-zinc-700 md:block">
+                      {formatNumber(metricValue(report.totals, "dms"))}
+                      <span className="text-zinc-400"> DMs</span>
+                    </span>
+                    <ChevronRight className="size-4 text-zinc-300 group-hover:text-zinc-500" aria-hidden />
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </section>
 
-      <section className={`${card} grid gap-8 md:grid-cols-[1fr_auto]`}>
-        <div className="max-w-md">
-          <h2 className="mb-4 font-semibold">Client details</h2>
-          <ClientForm
-            mode="edit"
-            client={{
-              id: client.id,
-              name: client.name,
-              linkedinUrl: client.linkedinUrl,
-              apiKeyLast4: client.apiKeyLast4,
-            }}
+      <details className={`${card} group`}>
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 text-sm font-semibold text-zinc-900 [&::-webkit-details-marker]:hidden">
+          <Settings className="size-4 text-zinc-400" aria-hidden />
+          Client settings
+          <ChevronDown
+            className="ml-auto size-4 text-zinc-400 transition-transform group-open:rotate-180"
+            aria-hidden
           />
+        </summary>
+        <div className="grid gap-8 border-t border-zinc-100 p-5 md:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="max-w-md">
+            <ClientForm
+              mode="edit"
+              client={{
+                id: client.id,
+                name: client.name,
+                linkedinUrl: client.linkedinUrl,
+                apiKeyLast4: client.apiKeyLast4,
+              }}
+            />
+          </div>
+          <div className="md:border-l md:border-zinc-100 md:pl-8">
+            <h3 className="text-sm font-semibold text-zinc-900">Remove client</h3>
+            <p className="mb-4 mt-1 text-sm text-zinc-500">Deletes the client, their key and all their reports.</p>
+            <ConfirmSubmit
+              action={deleteClient.bind(null, client.id)}
+              label="Delete client"
+              confirmMessage={`Delete ${client.name} and all their reports? This can't be undone.`}
+            />
+          </div>
         </div>
-        <div className="md:border-l md:border-zinc-200 md:pl-8">
-          <h2 className="mb-2 font-semibold">Remove client</h2>
-          <p className="mb-4 max-w-56 text-sm text-zinc-600">Deletes the client, their key and all their reports.</p>
-          <ConfirmSubmit
-            action={deleteClient.bind(null, client.id)}
-            label="Delete client"
-            confirmMessage={`Delete ${client.name} and all their reports? This can't be undone.`}
-          />
-        </div>
-      </section>
-    </div>
+      </details>
+    </>
   );
 }
