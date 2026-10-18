@@ -8,6 +8,8 @@ import { ClientAvatar } from "@/components/avatar";
 type Props = {
   clients: Array<{ id: string; name: string; creators: Array<{ name: string; src: string | null }> }>;
   schedule: string;
+  /** Why the automatic run can't work, when it can't. */
+  problem: string | null;
 };
 
 function navItem(active: boolean) {
@@ -19,7 +21,7 @@ function navItem(active: boolean) {
 }
 
 /** Sidebar links. Reads the pathname for the active state, so it renders inside Suspense. */
-export function SidebarNav({ clients, schedule }: Props) {
+export function SidebarNav({ clients, schedule, problem }: Props) {
   const pathname = usePathname();
   const activeClient = clients.find((client) => pathname.startsWith(`/clients/${client.id}`));
 
@@ -55,12 +57,12 @@ export function SidebarNav({ clients, schedule }: Props) {
         <div className="flex-1" />
       )}
 
-      <SidebarSchedule schedule={schedule} />
+      <SidebarSchedule schedule={schedule} problem={problem} />
     </>
   );
 }
 
-export function SidebarSchedule({ schedule }: { schedule: string }) {
+export function SidebarSchedule({ schedule, problem }: Pick<Props, "schedule" | "problem">) {
   return (
     <div className="mt-4 rounded-lg border border-zinc-200/80 bg-white p-3 text-xs text-zinc-500">
       <p className="flex items-center gap-1.5 font-medium text-zinc-800">
@@ -68,6 +70,7 @@ export function SidebarSchedule({ schedule }: { schedule: string }) {
         Auto reports
       </p>
       <p className="mt-1">{schedule}, for every client.</p>
+      {problem ? <p className="mt-1 font-medium text-bad">{problem}</p> : null}
     </div>
   );
 }

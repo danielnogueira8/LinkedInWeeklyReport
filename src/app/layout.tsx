@@ -6,6 +6,7 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { avatarSrc } from "@/components/avatar";
 import { SidebarNav, SidebarSchedule } from "@/components/sidebar";
+import { cronSetupProblem } from "@/lib/cron";
 import { listClientNames } from "@/lib/data";
 import { weeklyRunLabel } from "@/lib/period";
 import "./globals.css";
@@ -44,7 +45,7 @@ async function SidebarClients() {
     // Pages show the database error; the sidebar just stays empty.
     console.error("Sidebar couldn't load clients", err);
   }
-  return <SidebarNav clients={clients} schedule={weeklyRunLabel()} />;
+  return <SidebarNav clients={clients} schedule={weeklyRunLabel()} problem={cronSetupProblem()} />;
 }
 
 function SidebarFallback() {
@@ -55,7 +56,7 @@ function SidebarFallback() {
         <div className="h-4 w-20 animate-pulse rounded bg-zinc-200" />
       </div>
       <div className="flex-1" />
-      <SidebarSchedule schedule={weeklyRunLabel()} />
+      <SidebarSchedule schedule={weeklyRunLabel()} problem={cronSetupProblem()} />
     </>
   );
 }
