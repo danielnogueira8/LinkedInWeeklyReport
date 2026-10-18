@@ -9,7 +9,7 @@ import { getClient, getReportWithClient } from "@/lib/data";
 import { clients, db, profiles, reports, type ClientWithProfiles } from "@/lib/db";
 import { LeadSharkError, otherKeyOwner, verifyApiKey } from "@/lib/leadshark";
 import { normalizeProfileUrl } from "@/lib/linkedin";
-import { lastFullWeek, resolvePeriod, type Period } from "@/lib/period";
+import { lastSevenDays, type Period } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
 import { defaultHighlights } from "@/lib/report/text";
 
@@ -152,8 +152,8 @@ export async function createClient(_prev: FormState, formData: FormData): Promis
     return { ...created, profiles: createdProfiles };
   });
 
-  // Start them off with last week's report. A failure here shouldn't block adding the client.
-  await tryGenerate(client, lastFullWeek());
+  // Start them off with a report for the last 7 days. A failure here shouldn't block adding the client.
+  await tryGenerate(client, lastSevenDays());
   redirect(`/clients/${client.id}`);
 }
 
@@ -214,15 +214,13 @@ export async function deleteClient(clientId: string) {
   redirect("/");
 }
 
-export async function createReport(clientId: string, _prev: FormState, formData: FormData): Promise<FormState> {
-  const fields = { period: field(formData, "period") };
-  const period = resolvePeriod(fields.period);
-  if (!period) return { error: "Pick a period.", fields };
+/** Builds the client's report for the 7 days up to now. */
+export async function createReport(clientId: string): Promise<FormState> {
   const client = await getClient(clientId);
   if (!client) return { error: "This client no longer exists." };
 
-  const result = await tryGenerate(client, period);
-  if (result.error) return { error: result.error, fields };
+  const result = await tryGenerate(client, lastSevenDays());
+  if (result.error) return { error: result.error };
   redirect(`/reports/${result.report!.id}`);
 }
 

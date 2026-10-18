@@ -4,8 +4,7 @@ import { Check, Copy, RefreshCw, RotateCcw, Sparkles, Trash2 } from "lucide-reac
 import { useActionState, useState } from "react";
 import { createReport, regenerateReport, resetHighlights, saveHighlights } from "@/app/actions";
 import { FormMessage, SubmitButton } from "@/components/form-status";
-import { button, input, textarea } from "@/components/ui";
-import type { PeriodOption } from "@/lib/period";
+import { button, textarea } from "@/components/ui";
 
 export function CopyButton({
   text,
@@ -42,40 +41,16 @@ export function CopyButton({
   );
 }
 
-export function GenerateReportForm({
-  clientId,
-  options,
-  defaultValue,
-}: {
-  clientId: string;
-  options: PeriodOption[];
-  defaultValue: string;
-}) {
+/** Builds a report for the 7 days up to now (building again the same week updates that week's). */
+export function GenerateReportForm({ clientId }: { clientId: string }) {
   const [state, formAction] = useActionState(createReport.bind(null, clientId), undefined);
 
   return (
     <form action={formAction} className="space-y-2">
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <label htmlFor="period" className="sr-only">
-          Period
-        </label>
-        <select
-          id="period"
-          name="period"
-          defaultValue={state?.fields?.period ?? defaultValue}
-          className={`${input} sm:w-72`}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <SubmitButton pendingLabel="Pulling from LeadShark…">
-          <Sparkles aria-hidden />
-          Generate report
-        </SubmitButton>
-      </div>
+      <SubmitButton pendingLabel="Pulling from LeadShark…">
+        <Sparkles aria-hidden />
+        Generate report
+      </SubmitButton>
       <FormMessage state={state} />
     </form>
   );

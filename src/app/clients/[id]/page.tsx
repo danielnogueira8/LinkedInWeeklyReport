@@ -11,17 +11,7 @@ import { PartialWeek } from "@/components/partial-week";
 import { GenerateReportForm } from "@/components/report-controls";
 import { button, card, cardHeader, cardTitle, pill } from "@/components/ui";
 import { getClient, listReports } from "@/lib/data";
-import {
-  currentWeek,
-  dayMonth,
-  formatTimestamp,
-  isPartial,
-  isWeekReport,
-  localDate,
-  periodOptions,
-  periodValue,
-  shortRange,
-} from "@/lib/period";
+import { dayMonth, formatTimestamp, isPartial, localDate, shortRange } from "@/lib/period";
 import { change, metricValue, previousWeek, weekSlots, weeklySeries } from "@/lib/report/compare";
 import { formatNumber } from "@/lib/report/text";
 
@@ -97,11 +87,7 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
               <Settings aria-hidden />
               Settings
             </Link>
-            <GenerateReportForm
-              clientId={client.id}
-              options={periodOptions()}
-              defaultValue={periodValue(currentWeek())}
-            />
+            <GenerateReportForm clientId={client.id} />
           </>
         }
       />
@@ -172,15 +158,14 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
         {reports.length === 0 ? (
           <div className="p-5">
             <EmptyState icon={<FileText />} title="No reports yet">
-              Pick a week above and generate the first one.
+              Generate the first one above. It covers the last 7 days.
             </EmptyState>
           </div>
         ) : (
           <ul className="divide-y divide-zinc-100">
             {reports.map((report) => {
               const period = { start: report.periodStart, end: report.periodEnd };
-              const calendar = isWeekReport(period, report.timezone);
-              const before = calendar ? previousWeek(weeks, report) : null;
+              const before = previousWeek(weeks, report);
               return (
                 <li key={report.id}>
                   <Link
@@ -196,7 +181,6 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
                           {shortRange(period, report.timezone)}{" "}
                           {localDate(new Date(report.periodEnd.getTime() - 1), report.timezone).slice(0, 4)}
                         </span>
-                        {!calendar ? <span className={`${pill} bg-zinc-100 text-zinc-600`}>Rolling 7 days</span> : null}
                         {isPartial(period, report.generatedAt, report.timezone) ? <PartialWeek /> : null}
                         {report.highlightsOverride ? (
                           <span className={`${pill} bg-brand-50 text-brand-700`}>Edited</span>

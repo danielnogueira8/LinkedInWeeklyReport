@@ -182,7 +182,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
             key={metric}
             label={label}
             value={metricValue(totals, metric)}
-            delta={previous ? change(metricValue(totals, metric), metricValue(previous.data.totals, metric)) : null}
+            delta={previous ? change(metricValue(totals, metric), metricValue(previous.totals, metric)) : null}
             footnote={
               metric === "dms" && totals.followUps > 0
                 ? `${formatNumber(totals.firstDms)} first · ${formatNumber(totals.followUps)} follow-ups`

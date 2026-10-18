@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { clients, db, profiles, reports } from "@/lib/db";
-import { localDate } from "@/lib/period";
+import { reportWeek } from "@/lib/period";
 import type { ReportTotals } from "@/lib/report/build";
 import { previousWeek, weeklySeries } from "@/lib/report/compare";
 
@@ -20,7 +20,18 @@ export async function listClientNames() {
   });
 }
 
-/** Clients with their recent calendar-week totals, for the overview table. */
+// What the weekly series needs from a report, without its posts.
+const weekColumns = {
+  id: reports.id,
+  clientId: reports.clientId,
+  periodStart: reports.periodStart,
+  periodEnd: reports.periodEnd,
+  generatedAt: reports.generatedAt,
+  timezone: sql<string>`${reports.data}->>'timezone'`,
+  totals: sql<ReportTotals>`${reports.data}->'totals'`,
+};
+
+/** Clients with their recent weekly totals, for the overview table. */
 export async function listClientsOverview() {
   const [clientRows, reportRows] = await Promise.all([
     db().query.clients.findMany({
@@ -32,18 +43,7 @@ export async function listClientsOverview() {
         },
       },
     }),
-    db()
-      .select({
-        id: reports.id,
-        clientId: reports.clientId,
-        periodStart: reports.periodStart,
-        periodEnd: reports.periodEnd,
-        generatedAt: reports.generatedAt,
-        timezone: sql<string>`${reports.data}->>'timezone'`,
-        totals: sql<ReportTotals>`${reports.data}->'totals'`,
-      })
-      .from(reports)
-      .orderBy(asc(reports.periodStart)),
+    db().select(weekColumns).from(reports).orderBy(asc(reports.periodStart)),
   ]);
 
   return clientRows.map((client) => {
@@ -70,9 +70,11 @@ export async function listReports(clientId: string) {
     where: eq(reports.clientId, clientId),
     orderBy: [desc(reports.generatedAt)],
   });
-  // Compared by local start date: a week built under another timezone starts an hour or so apart.
-  const day = (row: (typeof rows)[number]) => localDate(row.periodStart, row.data.timezone);
-  return rows.sort((a, b) => day(b).localeCompare(day(a)));
+  // By the Sunday each week ends on, so an old Monday-to-Monday report sits with the newer one
+  // for the same week, and a week built under another timezone still lines up.
+  const week = (row: (typeof rows)[number]) =>
+    reportWeek({ start: row.periodStart, end: row.periodEnd }, row.data.timezone);
+  return rows.sort((a, b) => week(b).localeCompare(week(a)));
 }
 
 export async function getReportWithClient(id: string) {
@@ -85,12 +87,13 @@ export async function getReportWithClient(id: string) {
   );
 }
 
-/** The report covering the period that ends exactly where this one starts. */
-export async function getPreviousReport(report: { clientId: string; periodStart: Date }) {
-  return (
-    (await db().query.reports.findFirst({
-      where: and(eq(reports.clientId, report.clientId), eq(reports.periodEnd, report.periodStart)),
-      orderBy: [desc(reports.generatedAt)],
-    })) ?? null
-  );
+/** The client's report for the week before this one's (the latest built for it), if there is one. */
+export async function getPreviousReport(report: {
+  clientId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  data: { timezone: string };
+}) {
+  const rows = await db().select(weekColumns).from(reports).where(eq(reports.clientId, report.clientId));
+  return previousWeek(weeklySeries(rows, Infinity), { ...report, timezone: report.data.timezone });
 }

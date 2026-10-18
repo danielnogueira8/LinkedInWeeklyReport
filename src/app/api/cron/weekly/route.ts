@@ -1,10 +1,10 @@
 import { asc } from "drizzle-orm";
 import { db, profiles } from "@/lib/db";
-import { isWeeklyRunHour, lastFullWeek } from "@/lib/period";
+import { isWeeklyRunHour, lastSevenDays } from "@/lib/period";
 import { generateReport } from "@/lib/report/generate";
 
-// Builds every client's report for the Sunday-to-Sunday week that ended that midnight, on
-// Sunday at 21:00 report time.
+// Builds every client's report for the 7 days up to now (last Sunday to this one) on Sunday
+// at 21:00 report time.
 // vercel.json fires it (via ./[slot]) at 20:00 and 21:00 UTC on Sundays (crons are UTC-only,
 // and the zone's offset shifts with daylight saving); only the run that lands in
 // the right local hour does the work. `?force=1` skips the clock check.
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     return Response.json({ skipped: true, reason: "Not the weekly run hour in the report timezone." });
   }
 
-  const period = lastFullWeek(now);
+  const period = lastSevenDays(now);
   const queue = await db().query.clients.findMany({
     with: { profiles: { orderBy: [asc(profiles.position)], columns: { avatar: false } } },
   });

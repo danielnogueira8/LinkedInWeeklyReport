@@ -213,7 +213,7 @@ export function ClientForm(props: Props) {
       ) : null}
 
       <FormMessage state={state} />
-      <SubmitButton pendingLabel={client ? "Saving…" : "Checking keys and building last week's report…"}>
+      <SubmitButton pendingLabel={client ? "Saving…" : "Checking keys and building the first report…"}>
         {client ? null : <Plus aria-hidden />}
         {client ? "Save changes" : joint ? "Add joint client" : "Add client"}
       </SubmitButton>

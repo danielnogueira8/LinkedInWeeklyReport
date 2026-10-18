@@ -21,7 +21,7 @@ export default function NewClientPage() {
     {
       icon: ChartColumn,
       title: "First report",
-      text: "Last week's report builds straight away, so there's something to send.",
+      text: "A report for the last 7 days builds straight away, so there's something to send.",
     },
     { icon: CalendarClock, title: "Then every week", text: `New reports build on ${weeklyRunLabel()}.` },
   ];

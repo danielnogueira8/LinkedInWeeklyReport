@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAutomation, normalizePost } from "@/lib/leadshark";
 import { buildReportData } from "@/lib/report/build";
-import { weeklySeries } from "@/lib/report/compare";
+import { previousWeek, reportToReplace, weeklySeries, weekSlots } from "@/lib/report/compare";
 import { renderReportPdf } from "@/lib/report/pdf";
 import { defaultHighlights, dmsSummary, parseHighlights, renderReportText } from "@/lib/report/text";
 
@@ -328,24 +328,52 @@ describe("weekly report", () => {
 });
 
 describe("weekly series", () => {
-  it("keeps one report per Sunday-to-Sunday week, the latest built, even across timezones", () => {
-    const totals = { posts: 0, impressions: 0, reactions: 0, comments: 0, reposts: 0, firstDms: 0, followUps: 0 };
-    const row = (start: string, end: string, timezone: string, generatedAt: string, impressions: number) => ({
-      periodStart: new Date(start),
-      periodEnd: new Date(end),
-      timezone,
-      generatedAt: new Date(generatedAt),
-      totals: { ...totals, impressions },
-    });
-    const series = weeklySeries([
-      row("2026-10-04T00:00:00Z", "2026-10-11T00:00:00Z", "UTC", "2026-10-17T17:32:00Z", 0),
-      row("2026-10-03T23:00:00Z", "2026-10-10T23:00:00Z", "Europe/Lisbon", "2026-10-17T18:24:00Z", 86500),
-      row("2026-10-11T00:00:00Z", "2026-10-18T00:00:00Z", "UTC", "2026-10-17T17:33:00Z", 0),
-      row("2026-10-10T23:00:00Z", "2026-10-17T23:00:00Z", "Europe/Lisbon", "2026-10-17T18:48:00Z", 11689),
-      // A Monday-to-Monday week from before weeks started on Sunday overlaps them, so it's left out.
-      row("2026-10-11T23:00:00Z", "2026-10-18T23:00:00Z", "Europe/Lisbon", "2026-10-17T19:00:00Z", 500),
-    ]);
-    expect(series.map((week) => week.totals.impressions)).toEqual([86500, 11689]);
+  const lisbon = "Europe/Lisbon";
+  const totals = { posts: 0, impressions: 0, reactions: 0, comments: 0, reposts: 0, firstDms: 0, followUps: 0 };
+  const row = (start: string, end: string, timezone: string, generatedAt: string, impressions: number) => ({
+    periodStart: new Date(start),
+    periodEnd: new Date(end),
+    timezone,
+    generatedAt: new Date(generatedAt),
+    totals: { ...totals, impressions },
+  });
+  // Old Monday-to-Monday weeks: 28 Sep - 5 Oct and 5 - 12 Oct.
+  const sep28 = row("2026-09-27T23:00:00Z", "2026-10-04T23:00:00Z", lisbon, "2026-10-04T20:00:03Z", 30000);
+  const oct5 = row("2026-10-04T23:00:00Z", "2026-10-11T23:00:00Z", lisbon, "2026-10-11T20:00:02Z", 86500);
+  // The same week built under UTC, earlier: superseded.
+  const oct5utc = row("2026-10-05T00:00:00Z", "2026-10-12T00:00:00Z", "UTC", "2026-10-11T17:32:00Z", 0);
+  // An old Monday week built on Saturday, then Sunday's run: the last 7 days, Sunday 21:00 to Sunday 21:00.
+  const oct12 = row("2026-10-11T23:00:00Z", "2026-10-18T23:00:00Z", lisbon, "2026-10-17T18:48:00Z", 11689);
+  const sunday = row("2026-10-11T20:00:02Z", "2026-10-18T20:00:02Z", lisbon, "2026-10-18T20:00:09Z", 20000);
+
+  it("keeps one report per week ending on a Sunday, the latest built, old Monday weeks included", () => {
+    const series = weeklySeries([sep28, oct5, oct5utc, oct12, sunday]);
+    expect(series.map((week) => week.totals.impressions)).toEqual([30000, 86500, 20000]);
+    // Compared with the week before, even though their dates don't meet exactly.
+    expect(previousWeek(series, sunday)?.totals.impressions).toBe(86500);
+    expect(previousWeek(series, sep28)).toBeNull();
+  });
+
+  it("charts the weeks up to the latest, with gaps where a week has no report", () => {
+    const slots = weekSlots(weeklySeries([sep28, sunday]));
+    expect(slots.map((slot) => slot.row?.totals.impressions ?? null)).toEqual([30000, null, 20000]);
+    // The missing week stands in as the 7 days up to its Sunday run.
+    expect(slots[1].start.toISOString()).toBe("2026-10-04T20:00:00.000Z");
+    expect(slots[1].end.toISOString()).toBe("2026-10-11T20:00:00.000Z");
+  });
+
+  it("moves the week's report forward when it's built again, but never an old week or a refresh", () => {
+    const saturdayBuild = row("2026-10-10T11:00:00Z", "2026-10-17T11:00:00Z", lisbon, "2026-10-17T11:00:05Z", 0);
+    const nextWeek = row("2026-10-18T20:00:00Z", "2026-10-25T21:00:00Z", lisbon, "2026-10-25T21:00:04Z", 0);
+    const saved = [nextWeek, saturdayBuild, oct12, oct5];
+    const period = (r: typeof sunday) => ({ start: r.periodStart, end: r.periodEnd });
+    // Sunday's run lands on Saturday's build of the same week, not the old Monday week next to it.
+    expect(reportToReplace(saved, period(sunday), lisbon)).toBe(saturdayBuild);
+    // Refreshing a saved report keeps it as it is.
+    expect(reportToReplace(saved, period(saturdayBuild), lisbon)).toBeNull();
+    expect(reportToReplace(saved, period(oct12), lisbon)).toBeNull();
+    // A week with no report built the current way gets a new one.
+    expect(reportToReplace([oct5], period(sunday), lisbon)).toBeNull();
   });
 });
 

@@ -1,3 +1,4 @@
+import { desc, eq } from "drizzle-orm";
 import { refreshStaleAvatars } from "@/lib/avatars";
 import { decrypt } from "@/lib/crypto";
 import { db, reports, type ClientWithProfiles, type Profile, type Report } from "@/lib/db";
@@ -11,6 +12,7 @@ import {
 } from "@/lib/leadshark";
 import { dayMonth, reportTimezone, weekdayShort, type Period } from "@/lib/period";
 import { buildReportData, excerptOf, type FeedCheck, type ReportSource } from "@/lib/report/build";
+import { reportToReplace } from "@/lib/report/compare";
 
 async function fetchSource(
   profile: Profile,
@@ -97,9 +99,26 @@ export async function generateReport(client: ClientWithProfiles, period: Period)
     refreshStaleAvatars(client.profiles),
   ]);
 
-  const data = buildReportData({ period, timezone: reportTimezone(), sources, warnings });
+  const timezone = reportTimezone();
+  const data = buildReportData({ period, timezone, sources, warnings });
 
   const now = new Date();
+  // Building again in the same week moves that week's report on to the new 7 days.
+  const existing = await db().query.reports.findMany({
+    where: eq(reports.clientId, client.id),
+    columns: { id: true, periodStart: true, periodEnd: true },
+    orderBy: [desc(reports.generatedAt)],
+  });
+  const replace = reportToReplace(existing, period, timezone);
+  if (replace) {
+    const [moved] = await db()
+      .update(reports)
+      .set({ periodStart: period.start, periodEnd: period.end, data, generatedAt: now })
+      .where(eq(reports.id, replace.id))
+      .returning();
+    return moved;
+  }
+
   const [saved] = await db()
     .insert(reports)
     .values({ clientId: client.id, periodStart: period.start, periodEnd: period.end, data, generatedAt: now })
