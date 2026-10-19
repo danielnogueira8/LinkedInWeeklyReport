@@ -79,10 +79,7 @@ function CreatorBreakdown({ data, photos }: { data: ReportData; photos: Map<stri
             >
               <span className="flex min-w-0 items-center gap-3">
                 <Avatar name={creator.name} src={photos.get(creator.id)} />
-                <span className="min-w-0">
-                  <span className="block truncate font-medium text-zinc-900">{creator.name}</span>
-                  <span className="block text-xs text-zinc-500">{plural(creator.totals.posts, "post")}</span>
-                </span>
+                <span className="min-w-0 truncate font-medium text-zinc-900">{creator.name}</span>
               </span>
               <span className="hidden items-center gap-3 sm:flex">
                 <span className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-100">

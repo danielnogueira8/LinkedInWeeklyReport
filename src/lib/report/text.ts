@@ -43,11 +43,10 @@ export function postStatsLine(post: ReportPost, timezone: string) {
   return parts.join(" · ");
 }
 
-/** "4 posts · 35,814 impressions · 367 comments · 136 DMs", for a joint report's per-creator lines. */
+/** "35,814 impressions · 367 comments · 136 DMs", for a joint report's per-creator lines. */
 export function creatorStatsLine(totals: ReportTotals) {
   const dms = totals.firstDms + totals.followUps;
   return [
-    plural(totals.posts, "post"),
     plural(totals.impressions, "impression"),
     plural(totals.comments, "comment"),
     ...(dms > 0 ? [plural(dms, "DM")] : []),
