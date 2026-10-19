@@ -62,7 +62,7 @@ export type FeedCheck = {
 export type ReportData = {
   timezone: string;
   totals: ReportTotals;
-  /** Posts published in the period, best first (by impressions). */
+  /** Posts published in the period, best first (see byRank; reports built before then are by impressions). */
   posts: ReportPost[];
   /** Posts we could not date, so they were left out. */
   undatedPosts: number;
@@ -87,6 +87,13 @@ export function isJoint(data: Pick<ReportData, "creators">) {
 
 export function dmsOf(post: Pick<ReportPost, "firstDms" | "followUps">) {
   return post.firstDms + post.followUps;
+}
+
+type Ranked = Pick<ReportPost, "comments" | "impressions" | "postedAt">;
+
+/** Best first: most comments, then most impressions, then the newest. */
+export function byRank(a: Ranked, b: Ranked) {
+  return b.comments - a.comments || b.impressions - a.impressions || b.postedAt.localeCompare(a.postedAt);
 }
 
 export function excerptOf(text: string) {
@@ -167,7 +174,7 @@ export function buildReportData(
           : {}),
       };
     })
-    .sort((a, b) => b.impressions - a.impressions || b.comments - a.comments || b.postedAt.localeCompare(a.postedAt));
+    .sort(byRank);
 
   const undatedPosts = posts.filter((post) => !post.postedAt).length;
   const warnings = [...(input.warnings ?? [])];

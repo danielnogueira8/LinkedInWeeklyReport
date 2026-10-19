@@ -3,7 +3,7 @@ import { normalizeAutomation, normalizePost } from "@/lib/leadshark";
 import { buildReportData } from "@/lib/report/build";
 import { previousWeek, reportToReplace, weeklySeries, weekSlots } from "@/lib/report/compare";
 import { renderReportPdf } from "@/lib/report/pdf";
-import { defaultHighlights, dmsSummary, parseHighlights, renderReportText } from "@/lib/report/text";
+import { defaultHighlights, dmsSummary, parseHighlights, renderReportText, topPosts } from "@/lib/report/text";
 
 /** A LinkedIn-style id whose embedded timestamp is `iso`. */
 function idAt(iso: string) {
@@ -146,16 +146,17 @@ describe("weekly report", () => {
         "Reposts: 9",
         "DMs sent: 251 (198 first DMs + 53 follow-ups)",
         "",
+        // Ranked by comments: Tuesday's and Friday's 3,000+ impressions brought one comment each.
         "Top 3 posts:",
         "",
         "1. Mon · 35,814 impressions · 122 reactions · 367 comments · 136 DMs",
         TOP_URL,
         "",
-        "2. Tue · 3,857 impressions · 20 reactions · 1 comment",
-        SECOND_URL,
+        "2. Wed · 1,200 impressions · 8 reactions · 20 comments · 70 DMs",
+        posts[3].url,
         "",
-        "3. Fri · 3,435 impressions · 25 reactions · 1 comment",
-        THIRD_URL,
+        "3. Thu · 1,100 impressions · 7 reactions · 12 comments · 45 DMs",
+        posts[4].url,
         "",
         "What worked best",
         "Monday's post “This AI app hit #1 on the App Store” was the clear winner:",
@@ -191,6 +192,16 @@ describe("weekly report", () => {
     const single = buildReportData({ period, timezone: "UTC", posts: posts.slice(0, 1), automations: [] });
     expect(defaultHighlights(single)).toBe(
       "Monday's post “This AI app hit #1 on the App Store” carried the week:\n- 35,814 impressions\n- 367 comments",
+    );
+  });
+
+  it("ranks posts by comments, even in a report saved by impressions", () => {
+    const savedByImpressions = { ...data, posts: [...data.posts].sort((a, b) => b.impressions - a.impressions) };
+    expect(topPosts(savedByImpressions).map((post) => post.id)).toEqual([posts[0].id, posts[3].id, posts[4].id]);
+    // Wednesday's 20 comments beat the 1 apiece on Tuesday's and Friday's bigger posts.
+    const busiest = buildReportData({ period, timezone: "UTC", posts: posts.slice(1, 4), automations: [] });
+    expect(defaultHighlights(busiest)).toBe(
+      "Wednesday's post “A post” led the week:\n- 1,200 impressions\n- 20 comments",
     );
   });
 
@@ -280,11 +291,11 @@ describe("weekly report", () => {
           "1. Mon · Alex Olim · 35,814 impressions · 122 reactions · 367 comments · 136 DMs",
           TOP_URL,
           "",
-          "2. Tue · Alex Olim · 3,857 impressions · 20 reactions · 1 comment",
-          SECOND_URL,
+          "2. Wed · Alex Olim · 1,200 impressions · 8 reactions · 20 comments · 70 DMs",
+          posts[3].url,
           "",
-          "3. Fri · Alex Olim · 3,435 impressions · 25 reactions · 1 comment",
-          THIRD_URL,
+          "3. Thu · Sam Lee · 1,100 impressions · 7 reactions · 12 comments · 45 DMs",
+          posts[4].url,
           "",
           "What worked best",
           "Alex Olim's Monday post “This AI app hit #1 on the App Store” was the clear winner:",

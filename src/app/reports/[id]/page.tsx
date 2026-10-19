@@ -14,7 +14,7 @@ import { getPreviousReport, getReportWithClient } from "@/lib/data";
 import { dayMonth, formatTimestamp, isPartial, isWeekReport, shortRange, weekdayShort } from "@/lib/period";
 import { dmsOf, isJoint, type ReportData, type ReportPost } from "@/lib/report/build";
 import { change, metricValue, type Metric } from "@/lib/report/compare";
-import { formatNumber, highlightsFor, plural, renderReportText, topPosts } from "@/lib/report/text";
+import { formatNumber, highlightsFor, plural, rankedPosts, renderReportText, topPosts } from "@/lib/report/text";
 
 // "Refresh numbers" calls LeadShark from a Server Action on this page.
 export const maxDuration = 60;
@@ -195,7 +195,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
           <section className={card}>
             <div className={cardHeader}>
               <h2 className={cardTitle}>Top posts</h2>
-              <span className="text-xs text-zinc-400">By impressions</span>
+              <span className="text-xs text-zinc-400">By comments</span>
             </div>
             {top.length === 0 ? (
               <p className="px-5 py-10 text-center text-sm text-zinc-500">No posts were published in this period.</p>
@@ -264,7 +264,7 @@ export default async function ReportPage({ params }: PageProps<"/reports/[id]">)
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
-                    {data.posts.map((post) => (
+                    {rankedPosts(data).map((post) => (
                       <tr key={post.id} className="hover:bg-zinc-50">
                         <td className="max-w-80 px-5 py-2.5">
                           <a

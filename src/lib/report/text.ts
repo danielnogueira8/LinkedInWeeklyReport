@@ -1,4 +1,4 @@
-import { dmsOf, isJoint, type ReportData, type ReportPost, type ReportTotals } from "@/lib/report/build";
+import { byRank, dmsOf, isJoint, type ReportData, type ReportPost, type ReportTotals } from "@/lib/report/build";
 import { formatPeriod, weekdayLong, weekdayShort, type Period } from "@/lib/period";
 
 const TOP_POSTS = 3;
@@ -13,8 +13,13 @@ export function plural(value: number, singular: string, pluralForm = `${singular
   return `${formatNumber(value)} ${value === 1 ? singular : pluralForm}`;
 }
 
+/** The period's posts, best first. Sorted here too, so reports saved in an older order follow it. */
+export function rankedPosts(data: ReportData) {
+  return [...data.posts].sort(byRank);
+}
+
 export function topPosts(data: ReportData) {
-  return data.posts.slice(0, TOP_POSTS);
+  return rankedPosts(data).slice(0, TOP_POSTS);
 }
 
 export function topPostsHeading(count: number) {
@@ -77,7 +82,7 @@ function multiplier(ratio: number) {
 
 /** The auto-written "What worked best" body. Agencies can overwrite it per report. */
 export function defaultHighlights(data: ReportData): string {
-  const [top] = data.posts;
+  const [top] = rankedPosts(data);
   if (!top) return "";
 
   const count = data.posts.length;
