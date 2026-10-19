@@ -95,7 +95,7 @@ export function HighlightsEditor({
         />
         <p className="text-xs leading-relaxed text-zinc-500">
           Lines starting with &quot;- &quot; become bullets. Name the winning post the way your client would, e.g.
-          &quot;The Bro teardown (#1) was the clear winner:&quot;.
+          &quot;The Bro teardown was the clear winner:&quot;.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <SubmitButton pendingLabel="Saving…">Save</SubmitButton>

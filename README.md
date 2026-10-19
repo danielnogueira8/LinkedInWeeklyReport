@@ -18,7 +18,7 @@ Top 3 posts:
 https://www.linkedin.com/posts/...
 
 What worked best
-Monday's post (#1) was the clear winner:
+Monday's post “This AI app hit #1 on the App Store” was the clear winner:
 - 35,814 impressions, about 5x an average post this week
 - 367 comments
 - 136 DMs sent so far, and still going.
@@ -34,7 +34,7 @@ Monday's post (#1) was the clear winner:
 - **What LeadShark returned**: each report keeps, per creator, every post LeadShark sent for the period, whether it was counted and why not (a repost, someone else's post, counted for the co-creator), plus how far back the feed reached. Open it at the bottom of the report and compare it with the creator's LinkedIn activity page.
 - **Post dates**: read from the LinkedIn post id itself (the id embeds the publish time), so they're accurate whatever date fields the API returns.
 - **Profile photos**: stored in the database (LinkedIn's image links expire) and served from `/avatars/<id>`. The app refreshes each creator's photo about weekly (alongside report builds, or in the background after a page view), retrying every 6 hours while it has none. LeadShark has no REST profile lookup, but every post carries its author's `profile_picture_url`, so the photo comes from the creator's own latest post. When they have none recently, paste the photo's link in Settings: on LinkedIn, open their photo, right-click it and choose Copy image address. Until then, initials show.
-- **"What worked best"**: auto-written from the numbers. Edit it on the report page (e.g. "The Bro teardown (#1) was the clear winner:") and the copy text and PDF both pick it up. "Refresh numbers" keeps your edit.
+- **"What worked best"**: auto-written from the numbers, naming the top post by its hook (its first line). Edit it on the report page (e.g. "The Bro teardown was the clear winner:") and the copy text and PDF both pick it up. "Refresh numbers" keeps your edit.
 - **PDF**: rendered on the server with `@react-pdf/renderer`, with clickable post links.
 
 ### LeadShark endpoints used

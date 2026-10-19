@@ -158,7 +158,7 @@ describe("weekly report", () => {
         THIRD_URL,
         "",
         "What worked best",
-        "Monday's post (#1) was the clear winner:",
+        "Monday's post “This AI app hit #1 on the App Store” was the clear winner:",
         "- 35,814 impressions, about 5x an average post this week",
         "- 367 comments",
         "- 136 DMs sent so far, and still going.",
@@ -186,12 +186,40 @@ describe("weekly report", () => {
 
   it("words the highlights to fit how dominant the top post was", () => {
     const even = buildReportData({ period, timezone: "UTC", posts: posts.slice(1, 3), automations: [] });
-    expect(defaultHighlights(even)).toBe("Tuesday's post (#1) led the week:\n- 3,857 impressions\n- 1 comment");
+    expect(defaultHighlights(even)).toBe("Tuesday's post “A post” led the week:\n- 3,857 impressions\n- 1 comment");
 
     const single = buildReportData({ period, timezone: "UTC", posts: posts.slice(0, 1), automations: [] });
     expect(defaultHighlights(single)).toBe(
-      "Monday's post (#1) carried the week:\n- 35,814 impressions\n- 367 comments",
+      "Monday's post “This AI app hit #1 on the App Store” carried the week:\n- 35,814 impressions\n- 367 comments",
     );
+  });
+
+  it("names the top post by its hook, tidied up and kept short", () => {
+    const leadFor = (text: string) => {
+      const raw = rawPost({
+        postedAt: "2026-10-12T09:05:00Z",
+        impressions: 10,
+        reactions: 0,
+        comments: 0,
+        reposts: 0,
+        text,
+      });
+      const data = buildReportData({ period, timezone: "UTC", posts: [normalizePost(raw)!], automations: [] });
+      return defaultHighlights(data).split("\n")[0];
+    };
+    // LinkedIn's bold letters become plain ones; the leading emoji and the full stop go.
+    expect(leadFor("🎁 𝗙𝗿𝗲𝗲 𝗚𝘂𝗶𝗱𝗲 for accountants.\n\nComment GUIDE")).toBe(
+      "Monday's post “Free Guide for accountants” carried the week:",
+    );
+    // A long first line is cut at a word.
+    expect(
+      leadFor(
+        "Firms will spend 6 months choosing new practice software and then never use half of the features they paid for",
+      ),
+    ).toBe(
+      "Monday's post “Firms will spend 6 months choosing new practice software and then never use half of the…” carried the week:",
+    );
+    expect(leadFor("")).toBe("Monday's post carried the week:");
   });
 
   it("drops the DM breakdown when there were no follow-ups", () => {
@@ -259,7 +287,7 @@ describe("weekly report", () => {
           THIRD_URL,
           "",
           "What worked best",
-          "Alex Olim's Monday post (#1) was the clear winner:",
+          "Alex Olim's Monday post “This AI app hit #1 on the App Store” was the clear winner:",
           "- 35,814 impressions, about 5x an average post this week",
           "- 367 comments",
           "- 136 DMs sent so far, and still going.",

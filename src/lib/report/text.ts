@@ -53,6 +53,23 @@ export function creatorStatsLine(totals: ReportTotals) {
   ].join(" · ");
 }
 
+const HOOK_LENGTH = 90;
+
+/** ` “Excel was 6 years late to the spreadsheet”`: the post's hook (first line), to name it by. */
+function quotedHook(post: ReportPost) {
+  // LinkedIn's bold and italic "fonts" are Unicode lookalikes that NFKC turns back into letters
+  // (the PDF can't draw them). A leading emoji or trailing punctuation doesn't help name the post.
+  let hook = post.excerpt
+    .normalize("NFKC")
+    .replace(/^[^\p{L}\p{N}"'“‘(£$€]+/u, "")
+    .replace(/[\s.,:;…]+$/, "");
+  if (hook.length > HOOK_LENGTH) {
+    const cut = hook.slice(0, HOOK_LENGTH);
+    hook = `${cut.replace(/\s+\S*$/, "").replace(/[\s.,:;]+$/, "") || cut}…`;
+  }
+  return hook ? ` “${hook}”` : "";
+}
+
 function multiplier(ratio: number) {
   const rounded = ratio >= 3 ? Math.round(ratio) : Math.round(ratio * 2) / 2;
   return `${rounded}x`;
@@ -65,7 +82,8 @@ export function defaultHighlights(data: ReportData): string {
 
   const count = data.posts.length;
   const weekday = weekdayLong(new Date(top.postedAt), data.timezone);
-  const label = top.profileName ? `${top.profileName}'s ${weekday} post (#1)` : `${weekday}'s post (#1)`;
+  const hook = quotedHook(top);
+  const label = top.profileName ? `${top.profileName}'s ${weekday} post${hook}` : `${weekday}'s post${hook}`;
   const average = data.totals.impressions / count;
   const ratio = average > 0 ? top.impressions / average : 0;
 
