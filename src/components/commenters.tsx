@@ -15,9 +15,15 @@ type Progress = {
   people: number;
   scored: number;
   icp: boolean;
+  /** Out of LeadShark calls for now: carry on after this (ISO time). */
+  pausedUntil: string | null;
 };
 
+// Run the next round a little after the pause ends, so the calls have aged out by then.
+const RESUME_SLACK_MS = 5_000;
+
 const count = (value: number) => value.toLocaleString("en-US");
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function describe(progress: Progress) {
   const reading = progress.postsRead < progress.posts;
@@ -32,7 +38,8 @@ function describe(progress: Progress) {
 
 /**
  * Pulls comments and scores commenters for the view, round after round (each round is one
- * request of a few minutes) until it's done, refreshing the list as it goes.
+ * request of a few minutes) until it's done, refreshing the list as it goes. When LeadShark's
+ * hourly limit is reached it waits until the server says to carry on.
  */
 export function SyncCommenters({ clientId, view }: { clientId: string; view: "week" | "all" }) {
   const router = useRouter();
@@ -54,9 +61,20 @@ export function SyncCommenters({ clientId, view }: { clientId: string; view: "we
           setStatus({ text: body?.error ?? "The sync stopped. Click again to carry on.", error: true });
           break;
         }
-        setStatus({ text: body.done ? describe(body) : `${describe(body)} Keep this page open.` });
         router.refresh();
-        if (body.done) break;
+        if (body.done) {
+          setStatus({ text: describe(body) });
+          break;
+        }
+        if (!body.pausedUntil) {
+          setStatus({ text: `${describe(body)} Keep this page open.` });
+          continue;
+        }
+        setStatus({
+          text: `${describe(body)} LeadShark allows 250 requests an hour per creator, so this pauses until ${clock(body.pausedUntil)} and then carries on. Keep this page open.`,
+        });
+        const wait = Date.parse(body.pausedUntil) - Date.now() + RESUME_SLACK_MS;
+        await new Promise((resolve) => setTimeout(resolve, Math.max(RESUME_SLACK_MS, wait)));
       }
     } catch {
       setStatus({ text: "Lost the connection. Click again to carry on where it stopped.", error: true });

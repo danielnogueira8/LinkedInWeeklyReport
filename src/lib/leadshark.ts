@@ -51,6 +51,8 @@ export class LeadSharkError extends Error {
     readonly status: number | null,
     /** The creator whose key was in use, on joint reports. */
     readonly creator?: string,
+    /** On a 429, how long LeadShark asked us to wait, when it said. */
+    readonly retryAfterSeconds?: number,
   ) {
     super(creator ? `${message} (${creator})` : message);
     this.name = "LeadSharkError";
@@ -59,6 +61,27 @@ export class LeadSharkError extends Error {
   get isAuthError() {
     return this.status === 401 || this.status === 403;
   }
+
+  /** Over LeadShark's limits: 250 requests an hour per key, 100 a minute, 6,000 a day. */
+  get isRateLimited() {
+    return this.status === 429;
+  }
+}
+
+/** How long a 429 says to wait: the Retry-After header (seconds or a date), or a retry_after field. */
+export function retryAfterSeconds(header: string | null, body: unknown, now = Date.now()): number | undefined {
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds;
+    const at = Date.parse(header);
+    if (!Number.isNaN(at)) return Math.max(0, Math.ceil((at - now) / 1000));
+  }
+  const fields = isObject(body) ? [body, body.details].filter(isObject) : [];
+  for (const field of fields) {
+    const seconds = numeric(field.retry_after ?? field.retryAfter ?? field.retry_after_seconds);
+    if (seconds !== null) return seconds;
+  }
+  return undefined;
 }
 
 type Json = Record<string, unknown>;
@@ -106,11 +129,16 @@ async function request(
 
   if (!res.ok) {
     const detail = isObject(data) ? (data.error ?? data.message) : null;
+    const wait = res.status === 429 ? retryAfterSeconds(res.headers.get("retry-after"), data) : undefined;
     const message =
       res.status === 401 || res.status === 403
         ? "LeadShark rejected the API key"
-        : `LeadShark returned ${res.status}${typeof detail === "string" ? `: ${detail}` : ""}`;
-    throw new LeadSharkError(message, res.status);
+        : res.status === 429
+          ? `LeadShark's rate limit is used up for this key (it allows 250 requests an hour). Try again ${
+              wait === undefined ? "in a few minutes" : `in ${Math.max(1, Math.ceil(wait / 60))} min`
+            }`
+          : `LeadShark returned ${res.status}${typeof detail === "string" ? `: ${detail}` : ""}`;
+    throw new LeadSharkError(message, res.status, undefined, wait);
   }
   return data;
 }
