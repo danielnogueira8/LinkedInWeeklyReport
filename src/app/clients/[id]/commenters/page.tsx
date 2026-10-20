@@ -21,7 +21,7 @@ import { getClient } from "@/lib/data";
 import { dayMonth, formatTimestamp } from "@/lib/period";
 import { formatNumber } from "@/lib/report/text";
 
-// The page shows the best this many; the CSV has everyone.
+// The page shows the best this many; the Excel and CSV downloads have everyone.
 const SHOWN = 200;
 
 const VIEWS: Array<{ view: CommentersView; label: string; description: string }> = [
@@ -89,10 +89,20 @@ export default async function CommentersPage({ params, searchParams }: PageProps
         actions={
           <>
             {total > 0 ? (
-              <a href={`/clients/${client.id}/commenters/csv?view=${view}`} className={button.secondary}>
-                <Download aria-hidden />
-                CSV
-              </a>
+              <>
+                <a
+                  href={`/clients/${client.id}/commenters/export?view=${view}&format=xlsx`}
+                  className={button.secondary}
+                  title="Rows coloured by ICP fit, highest match first"
+                >
+                  <Download aria-hidden />
+                  Excel
+                </a>
+                <a href={`/clients/${client.id}/commenters/export?view=${view}`} className={button.secondary}>
+                  <Download aria-hidden />
+                  CSV
+                </a>
+              </>
             ) : null}
             <SyncCommenters key={view} clientId={client.id} view={view} />
           </>
@@ -161,7 +171,7 @@ export default async function CommentersPage({ params, searchParams }: PageProps
         </div>
         <p className="border-b border-zinc-100 px-5 py-2.5 text-xs text-zinc-500">
           {current.description}
-          {total > SHOWN ? ` Showing the best ${SHOWN} of ${formatNumber(total)}: the CSV has everyone.` : ""}
+          {total > SHOWN ? ` Showing the best ${SHOWN} of ${formatNumber(total)}: the downloads have everyone.` : ""}
         </p>
 
         {commenters.length === 0 ? (

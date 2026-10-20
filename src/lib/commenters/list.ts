@@ -1,4 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
+import { xlsx } from "@/lib/commenters/xlsx";
 import { db, type ClientWithProfiles } from "@/lib/db";
 import { profileHandle } from "@/lib/linkedin";
 import { lastSevenDays, localDate } from "@/lib/period";
@@ -93,10 +94,14 @@ function people(client: ClientWithProfiles, since: Date | null): SQL {
     LEFT JOIN icp_scores s ON s.client_id = ${client.id} AND s.person_id = people.person_id`;
 }
 
-/** Fits first, then adjacent, not yet scored, unreadable headlines, and not a fit. */
+/**
+ * Highest ICP match first (people not scored yet go last), then fit, adjacent, not yet scored,
+ * unreadable and not a fit, then whoever commented most and most recently.
+ */
 const RANK = sql`
+  pct DESC NULLS LAST,
   CASE fit WHEN 'fit' THEN 0 WHEN 'adjacent' THEN 1 WHEN 'unreadable' THEN 3 WHEN 'not' THEN 4 ELSE 2 END,
-  pct DESC NULLS LAST, comments DESC, last_at DESC, person_id`;
+  comments DESC, last_at DESC, person_id`;
 
 function toCommenter(row: Record<string, unknown>): Commenter {
   const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
@@ -161,9 +166,34 @@ export function connectionLabel(distance: string | null) {
   return distance ? (DISTANCES[distance] ?? distance) : "";
 }
 
+type Column = {
+  header: string;
+  /** In Excel's character widths. */
+  width: number;
+  value: (person: Commenter, timezone: string) => string | number | null;
+};
+
+/** What the CSV and the Excel file list for each person, in order. */
+const COLUMNS: Column[] = [
+  { header: "Name", width: 26, value: (person) => person.name },
+  { header: "LinkedIn", width: 44, value: (person) => person.profileUrl },
+  { header: "Headline", width: 60, value: (person) => person.headline },
+  { header: "ICP fit", width: 12, value: (person) => fitLabel(person.fit) },
+  { header: "ICP match %", width: 12, value: (person) => person.pct },
+  { header: "ICP confidence", width: 14, value: (person) => person.confidence },
+  { header: "Comments", width: 11, value: (person) => person.comments },
+  { header: "Posts commented on", width: 18, value: (person) => person.posts },
+  { header: "Last comment", width: 13, value: (person, timezone) => localDate(person.lastAt, timezone) },
+  { header: "First comment", width: 13, value: (person, timezone) => localDate(person.firstAt, timezone) },
+  { header: "Latest comment", width: 50, value: (person) => person.latestComment },
+  { header: "Connection", width: 12, value: (person) => connectionLabel(person.networkDistance) },
+  { header: "Posts", width: 60, value: (person) => person.hooks.join(" | ") },
+  { header: "Creators", width: 26, value: (person) => person.creators.join(", ") },
+];
+
 /** A spreadsheet cell: quoted when needed, and never read as a formula (comments are anyone's text). */
-function csvCell(value: string | number) {
-  let text = String(value);
+function csvCell(value: string | number | null) {
+  let text = String(value ?? "");
   if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
@@ -173,37 +203,27 @@ const BOM = String.fromCharCode(0xfeff);
 
 /** The list as CSV, opening with BOM. */
 export function commentersCsv(commenters: Commenter[], timezone: string) {
-  const header = [
-    "Name",
-    "LinkedIn",
-    "Headline",
-    "ICP fit",
-    "ICP match %",
-    "ICP confidence",
-    "Comments",
-    "Posts commented on",
-    "Last comment",
-    "First comment",
-    "Latest comment",
-    "Connection",
-    "Posts",
-    "Creators",
+  const rows = [
+    COLUMNS.map((column) => column.header),
+    ...commenters.map((person) => COLUMNS.map((column) => column.value(person, timezone))),
   ];
-  const rows = commenters.map((person) => [
-    person.name,
-    person.profileUrl,
-    person.headline,
-    fitLabel(person.fit),
-    person.pct ?? "",
-    person.confidence ?? "",
-    person.comments,
-    person.posts,
-    localDate(person.lastAt, timezone),
-    localDate(person.firstAt, timezone),
-    person.latestComment,
-    connectionLabel(person.networkDistance),
-    person.hooks.join(" | "),
-    person.creators.join(", "),
-  ]);
-  return `${BOM}${[header, ...rows].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`;
+  return `${BOM}${rows.map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`;
+}
+
+/** Row colours in the Excel file, by ICP label (Excel's own Good and Neutral fills). Others stay white. */
+const FILLS: Record<string, string> = { fit: "C6EFCE", adjacent: "FFEB9C", not: "EDEDED" };
+
+/** The list as an Excel file: rows coloured by ICP label, LinkedIn links clickable, header frozen with filters. */
+export function commentersXlsx(commenters: Commenter[], timezone: string) {
+  const linkColumn = COLUMNS.findIndex((column) => column.header === "LinkedIn");
+  return xlsx({
+    name: "Commenters",
+    columns: COLUMNS.map(({ header, width }) => ({ header, width })),
+    rows: commenters.map((person) => ({
+      cells: COLUMNS.map((column, index) =>
+        index === linkColumn && person.profileUrl ? { link: person.profileUrl } : column.value(person, timezone),
+      ),
+      fill: person.fit ? FILLS[person.fit] : undefined,
+    })),
+  });
 }

@@ -1,5 +1,15 @@
+import { inflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { commentersCsv, connectionLabel, fitLabel, parseView, viewStart, type Commenter } from "@/lib/commenters/list";
+import {
+  commentersCsv,
+  commentersXlsx,
+  connectionLabel,
+  fitLabel,
+  parseView,
+  viewStart,
+  type Commenter,
+} from "@/lib/commenters/list";
+import { crc32 } from "@/lib/commenters/xlsx";
 
 const person = (overrides: Partial<Commenter> = {}): Commenter => ({
   personId: "leanne-hatch",
@@ -77,5 +87,71 @@ describe("commenter lists", () => {
     ).toBe(true);
     expect(csv).toContain(`"'=HYPERLINK(""https://example.com"")\nthanks"`);
     expect(csv.endsWith("\r\n")).toBe(true);
+  });
+});
+
+/** The files in a zip, inflated: enough of a reader to check what the writer made. */
+function unzip(data: Buffer) {
+  const files = new Map<string, string>();
+  for (let at = 0; data.readUInt32LE(at) === 0x04034b50; ) {
+    const size = data.readUInt32LE(at + 18);
+    const nameLength = data.readUInt16LE(at + 26);
+    const name = data.subarray(at + 30, at + 30 + nameLength).toString("utf8");
+    const start = at + 30 + nameLength + data.readUInt16LE(at + 28);
+    const content = inflateRawSync(data.subarray(start, start + size));
+    expect(crc32(content)).toBe(data.readUInt32LE(at + 14));
+    files.set(name, content.toString("utf8"));
+    at = start + size;
+  }
+  return files;
+}
+
+describe("Excel export", () => {
+  it("checksums the way zip readers expect", () => {
+    expect(crc32(Buffer.from("123456789")).toString(16)).toBe("cbf43926");
+  });
+
+  it("colours each row by ICP label and keeps links clickable", () => {
+    const files = unzip(
+      commentersXlsx(
+        [
+          person(),
+          person({ personId: "b", name: "Billy <Harding> & co", fit: "adjacent", pct: 75 }),
+          person({ personId: "c", fit: "not", pct: 0, latestComment: "bell\u0007 rings" }),
+          person({ personId: "d", fit: null, pct: null, confidence: null }),
+        ],
+        "Europe/Lisbon",
+      ),
+    );
+    expect([...files.keys()]).toEqual([
+      "[Content_Types].xml",
+      "_rels/.rels",
+      "xl/workbook.xml",
+      "xl/_rels/workbook.xml.rels",
+      "xl/styles.xml",
+      "xl/worksheets/sheet1.xml",
+    ]);
+    const sheet = files.get("xl/worksheets/sheet1.xml")!;
+    const styles = files.get("xl/styles.xml")!;
+    // Fill 3 is green (fit), 4 yellow (adjacent), 5 grey (not a fit); styles 2, 3 and 4 use them.
+    expect(styles).toContain('<fills count="6">');
+    expect(styles.indexOf("FFC6EFCE")).toBeLessThan(styles.indexOf("FFFFEB9C"));
+    expect(styles).toContain('<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>');
+    const rowStyles = [...sheet.matchAll(/<row r="(\d+)"( s="(\d+)")?/g)].map((match) => match[3] ?? "none");
+    expect(rowStyles).toEqual(["none", "2", "3", "4", "none"]);
+    // The header row is bold and frozen, with filters over everything.
+    expect(sheet).toContain('<c r="A1" s="1" t="inlineStr"><is><t xml:space="preserve">Name</t></is></c>');
+    expect(sheet).toContain('state="frozen"');
+    expect(sheet).toContain('<autoFilter ref="A1:N5"/>');
+    expect(files.get("xl/workbook.xml")).toContain("'Commenters'!$A$1:$N$5");
+    expect(sheet).toContain(
+      '<c r="B2" s="2" t="str"><f>HYPERLINK(&quot;https://www.linkedin.com/in/leanne-hatch&quot;)</f><v>https://www.linkedin.com/in/leanne-hatch</v></c>',
+    );
+    expect(sheet).toContain('<c r="E3" s="3"><v>75</v></c>');
+    expect(sheet).toContain("Billy &lt;Harding&gt; &amp; co");
+    // A control character would make the file unreadable: it's dropped.
+    expect(sheet).toContain(">bell rings<");
+    // Not scored: no colour, and no match % cell.
+    expect(sheet).not.toContain('r="E5"');
   });
 });
