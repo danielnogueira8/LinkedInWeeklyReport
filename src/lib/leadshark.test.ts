@@ -4,9 +4,12 @@ import {
   isOwnPost,
   LeadSharkError,
   listAutomations,
+  listComments,
   listPostsSince,
+  normalizeComment,
   normalizePost,
   otherKeyOwner,
+  scoreIcp,
   verifyApiKey,
 } from "@/lib/leadshark";
 import { extractPostIds, normalizeProfileUrl, timestampFromPostId } from "@/lib/linkedin";
@@ -393,5 +396,90 @@ describe("listAutomations", () => {
     const result = await listAutomations("key");
     expect(result.map((a) => a.id)).toEqual(["a", "b"]);
     expect(calls.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+  });
+});
+
+describe("post comments", () => {
+  // As GET /api/v1/posts/{post_id}/comments sends it.
+  const raw = {
+    comment_id: "7516882276496855040",
+    text: "Review",
+    posted_at: "2026-10-16T15:26:31.637Z",
+    reactions_count: 0,
+    replies_count: 2,
+    commenter: {
+      linkedin_id: "BSJWright",
+      member_urn: "urn:li:fsd_profile:ACoAAAEGTjkBK7zeTOgY7-Vd09sdWu_IFdUoslg",
+      name: "Brian Wright ACMA, CGMA",
+      headline: "Helping businesses of all sizes achieve their goals",
+      profile_url: "https://www.linkedin.com/in/bsjwright",
+      profile_picture_url: null,
+      network_distance: "DISTANCE_1",
+      is_company: false,
+    },
+  };
+
+  it("reads a comment and who wrote it", () => {
+    expect(normalizeComment(raw)).toEqual({
+      id: "7516882276496855040",
+      personId: "bsjwright",
+      name: "Brian Wright ACMA, CGMA",
+      headline: "Helping businesses of all sizes achieve their goals",
+      profileUrl: "https://www.linkedin.com/in/bsjwright",
+      networkDistance: "DISTANCE_1",
+      isCompany: false,
+      text: "Review",
+      postedAt: new Date("2026-10-16T15:26:31.637Z"),
+    });
+    // Nobody to list without a commenter.
+    expect(normalizeComment({ ...raw, commenter: {} })).toBeNull();
+  });
+
+  it("asks for 100 a page and follows the cursor until has_more is false", async () => {
+    const calls = mockFetch([
+      { items: [raw], pagination: { cursor: "IjEwMCI=", has_more: true } },
+      { items: [raw], pagination: { cursor: null, has_more: false } },
+    ]);
+    const first = await listComments("key", "urn:li:activity:7516792741000007680", null);
+    expect(first.next).toBe("IjEwMCI=");
+    expect(calls[0].pathname).toBe("/api/v1/posts/urn%3Ali%3Aactivity%3A7516792741000007680/comments");
+    expect(calls[0].searchParams.get("limit")).toBe("100");
+    expect(calls[0].searchParams.has("cursor")).toBe(false);
+
+    const second = await listComments("key", "urn:li:activity:7516792741000007680", first.next);
+    expect(calls[1].searchParams.get("cursor")).toBe("IjEwMCI=");
+    expect(second).toMatchObject({ next: null, comments: [{ personId: "bsjwright" }] });
+  });
+});
+
+describe("ICP scoring", () => {
+  it("sends the people and the client's ICP, and reads back each label", async () => {
+    let sent: { url: string; body: unknown } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init: RequestInit) => {
+        sent = { url: new URL(url).pathname, body: JSON.parse(String(init.body)) };
+        return new Response(
+          JSON.stringify({
+            icp: "UK accounting practice owners",
+            icp_source: "override",
+            people: [
+              { id: "bsjwright", name: "Brian Wright", headline: "x", fit: "adjacent", pct: 37, confidence: 43 },
+              { id: "odelia", name: "Odelia Z.", headline: "y", fit: "not", pct: 0, confidence: 100 },
+            ],
+            summary: { fit: 0, adjacent: 1, not: 1, unreadable: 0 },
+          }),
+        );
+      }),
+    );
+    const people = [
+      { id: "bsjwright", name: "Brian Wright", headline: "x" },
+      { id: "odelia", name: "Odelia Z.", headline: "y" },
+    ];
+    expect(await scoreIcp("key", people, "UK accounting practice owners")).toEqual([
+      { id: "bsjwright", fit: "adjacent", pct: 37, confidence: 43 },
+      { id: "odelia", fit: "not", pct: 0, confidence: 100 },
+    ]);
+    expect(sent).toEqual({ url: "/api/mcp/icp-fit", body: { people, icp: "UK accounting practice owners" } });
   });
 });

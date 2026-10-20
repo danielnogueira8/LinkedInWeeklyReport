@@ -4,6 +4,7 @@ import { and, eq, notInArray } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
 import { downloadPhoto, photoColumns, refreshAvatar } from "@/lib/avatars";
+import { ICP_MAX_LENGTH } from "@/lib/commenters/list";
 import { encrypt, ENCRYPTION_KEY_MISSING, encryptionReady } from "@/lib/crypto";
 import { getClient, getReportWithClient } from "@/lib/data";
 import { clients, db, profiles, reports, type ClientWithProfiles } from "@/lib/db";
@@ -207,6 +208,24 @@ export async function updateClient(clientId: string, _prev: FormState, formData:
       ? `Saved. LeadShark didn't return a photo for ${joinNames(without)}. Paste a photo link to add one.`
       : "Saved.",
   };
+}
+
+export async function saveIcp(clientId: string, _prev: FormState, formData: FormData): Promise<FormState> {
+  const icp = field(formData, "icp").replace(/\s+/g, " ");
+  if (icp.length > ICP_MAX_LENGTH) {
+    return {
+      error: `Keep it to ${ICP_MAX_LENGTH} characters: LeadShark scores against one sentence.`,
+      fields: { icp },
+    };
+  }
+  const [saved] = await db()
+    .update(clients)
+    .set({ icp: icp || null, updatedAt: new Date() })
+    .where(eq(clients.id, clientId))
+    .returning({ id: clients.id });
+  if (!saved) return { error: "This client no longer exists." };
+  refresh();
+  return { message: icp ? "Saved. Sync to score everyone against it." : "Cleared." };
 }
 
 export async function deleteClient(clientId: string) {

@@ -36,15 +36,18 @@ Monday's post “This AI app hit #1 on the App Store” was the clear winner:
 - **Profile photos**: stored in the database (LinkedIn's image links expire) and served from `/avatars/<id>`. The app refreshes each creator's photo about weekly (alongside report builds, or in the background after a page view), retrying every 6 hours while it has none. LeadShark has no REST profile lookup, but every post carries its author's `profile_picture_url`, so the photo comes from the creator's own latest post. When they have none recently, paste the photo's link in Settings: on LinkedIn, open their photo, right-click it and choose Copy image address. Until then, initials show.
 - **"What worked best"**: auto-written from the numbers, naming the top post by its hook (its first line). Edit it on the report page (e.g. "The Bro teardown was the clear winner:") and the copy text and PDF both pick it up. "Refresh numbers" keeps your edit.
 - **PDF**: rendered on the server with `@react-pdf/renderer`, with clickable post links.
+- **Commenters** (client page → Commenters): everyone who commented on the creators' own posts, one row per person, scored against the client's ideal customer. Write the ICP as one sentence (up to 280 characters) on that page; LeadShark's ICP check reads each commenter's name and headline against it and labels them fit, adjacent, not or unreadable, with a match %. Two lists: **Last 7 days** (commenters on posts published in the last 7 days) and **All time**, each downloadable as CSV with every person (the page shows the best 200). **Sync** reads the comments in rounds of up to 4 minutes and keeps going while the page is open: a creator's first all-time sync reads every post and can take half an hour for a big account (it's paced at one request every 1.5s, since reads go through the creator's LinkedIn account); later syncs only re-read posts whose comment count changed. Scores are kept, and only redone when the ICP or someone's headline changes. Company Pages and the creators themselves are left out; only top-level comments count, not replies.
 
 ### LeadShark endpoints used
 
 Authenticated with the `x-api-key` header against `https://apex.leadshark.io` ([docs](https://apex.leadshark.io/docs/api)):
 
-| Call                                | Used for                                                                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `GET /api/v1/posts?limit=&cursor=`  | The client's own posts and engagement (impressions, reactions, comments, reposts), and their photo |
-| `GET /api/automations?page=&limit=` | DM stats per automation, matched to posts by `automation_id` or post URL                           |
+| Call                                                     | Used for                                                                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/v1/posts?limit=&cursor=`                       | The client's own posts and engagement (impressions, reactions, comments, reposts), and their photo                       |
+| `GET /api/automations?page=&limit=`                      | DM stats per automation, matched to posts by `automation_id` or post URL                                                 |
+| `GET /api/v1/posts/{post_id}/comments?limit=100&cursor=` | Commenters on each post, for the Commenters page                                                                         |
+| `POST /api/mcp/icp-fit`                                  | Scores up to 100 commenters at a time against the client's ICP sentence (the route LeadShark's `icp_fit` MCP tool calls) |
 
 The client's API key must be for **their** LeadShark account. LinkedIn only shows impressions to the post's author.
 

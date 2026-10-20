@@ -1,4 +1,4 @@
-import { ChevronRight, ExternalLink, FileText, Settings } from "lucide-react";
+import { ChevronRight, ExternalLink, FileText, MessagesSquare, Settings } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -86,6 +86,10 @@ export default async function ClientPage({ params }: PageProps<"/clients/[id]">)
             <Link href={`/clients/${client.id}/settings`} className={button.secondary}>
               <Settings aria-hidden />
               Settings
+            </Link>
+            <Link href={`/clients/${client.id}/commenters`} className={button.secondary}>
+              <MessagesSquare aria-hidden />
+              Commenters
             </Link>
             <GenerateReportForm clientId={client.id} />
           </>

@@ -72,6 +72,7 @@ async function request(
   path: string,
   params: Record<string, string | number | undefined> = {},
   body?: Json,
+  timeoutMs = 30_000,
 ) {
   const url = new URL(path, baseUrl());
   for (const [key, value] of Object.entries(params)) {
@@ -89,7 +90,7 @@ async function request(
       },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     throw new LeadSharkError(`Could not reach LeadShark (${(err as Error).message})`, null);
@@ -458,6 +459,79 @@ export async function listAutomations(apiKey: string): Promise<LeadSharkAutomati
     if (!hasMore || batch.length === 0) break;
   }
   return automations;
+}
+
+// Comments come 100 to a page (the endpoint's default is 50), oldest LinkedIn order, top-level only.
+const COMMENTS_PAGE_SIZE = 100;
+// Scoring a batch reads every headline with a language model on LeadShark's side.
+const ICP_TIMEOUT_MS = 90_000;
+/** The most people LeadShark's ICP check takes in one call. */
+export const ICP_BATCH_SIZE = 100;
+
+export type PostComment = {
+  id: string;
+  /** The commenter's LinkedIn handle, lowercased. */
+  personId: string;
+  name: string;
+  headline: string;
+  profileUrl: string;
+  networkDistance: string | null;
+  isCompany: boolean;
+  text: string;
+  postedAt: Date;
+};
+
+export function normalizeComment(raw: unknown): PostComment | null {
+  if (!isObject(raw)) return null;
+  const commenter = isObject(raw.commenter) ? raw.commenter : isObject(raw.author) ? raw.author : {};
+  const id = str(raw.comment_id ?? raw.id);
+  const personId = str(commenter.linkedin_id ?? commenter.public_identifier)
+    .trim()
+    .toLowerCase();
+  const postedAt = parseDate(raw.posted_at ?? raw.created_at) ?? postedAtFromIds(id);
+  if (!id || !personId || !postedAt) return null;
+  return {
+    id,
+    personId,
+    name: str(commenter.name).trim(),
+    headline: str(commenter.headline).trim(),
+    profileUrl: str(commenter.profile_url) || `https://www.linkedin.com/in/${personId}`,
+    networkDistance: str(commenter.network_distance) || null,
+    isCompany: commenter.is_company === true,
+    text: str(raw.text).trim(),
+    postedAt,
+  };
+}
+
+/** One page of a post's top-level comments, and the cursor for the next page (null at the end). */
+export async function listComments(apiKey: string, postId: string, cursor: string | null) {
+  const data = await request(apiKey, `/api/v1/posts/${encodeURIComponent(postId)}/comments`, {
+    limit: COMMENTS_PAGE_SIZE,
+    cursor: cursor ?? undefined,
+  });
+  const comments = firstArray(data, ["items", "comments", "data"])
+    .map(normalizeComment)
+    .filter((comment): comment is PostComment => comment !== null);
+  const pagination = isObject(data) && isObject(data.pagination) ? data.pagination : {};
+  const next = pagination.has_more === true ? str(pagination.cursor) || null : null;
+  return { comments, next };
+}
+
+export type IcpPerson = { id: string; name: string; headline: string };
+export type IcpScore = { id: string; fit: string; pct: number | null; confidence: number | null };
+
+/**
+ * LeadShark's ICP check: each person's name and headline read against `icp`, labelled fit,
+ * adjacent, not or unreadable, with a 0-100 match and how readable the headline was.
+ */
+export async function scoreIcp(apiKey: string, people: IcpPerson[], icp: string): Promise<IcpScore[]> {
+  const data = await request(apiKey, "/api/mcp/icp-fit", {}, { people, icp }, ICP_TIMEOUT_MS);
+  return firstArray(data, ["people", "results", "items"]).flatMap((raw) => {
+    if (!isObject(raw)) return [];
+    const id = str(raw.id);
+    const fit = str(raw.fit ?? raw.label).toLowerCase();
+    return id && fit ? [{ id, fit, pct: numeric(raw.pct), confidence: numeric(raw.confidence) }] : [];
+  });
 }
 
 // Profile photos. The REST API has no "my profile" endpoint (/api/v1/me and the like are 404s)
