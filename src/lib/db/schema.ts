@@ -146,6 +146,21 @@ export const icpScores = pgTable(
   (table) => [primaryKey({ columns: [table.clientId, table.personId] })],
 );
 
+/**
+ * Each LeadShark call the commenter sync makes with a creator's key, so it can stay under
+ * LeadShark's 250 an hour per key. Rows older than a day are deleted.
+ */
+export const leadsharkCalls = pgTable(
+  "leadshark_calls",
+  {
+    profileId: uuid("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("leadshark_calls_profile_idx").on(table.profileId, table.at)],
+);
+
 export const clientsRelations = relations(clients, ({ many }) => ({
   reports: many(reports),
   profiles: many(profiles),

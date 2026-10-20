@@ -9,6 +9,7 @@ import {
   normalizeComment,
   normalizePost,
   otherKeyOwner,
+  retryAfterSeconds,
   scoreIcp,
   verifyApiKey,
 } from "@/lib/leadshark";
@@ -481,5 +482,41 @@ describe("ICP scoring", () => {
       { id: "odelia", fit: "not", pct: 0, confidence: 100 },
     ]);
     expect(sent).toEqual({ url: "/api/mcp/icp-fit", body: { people, icp: "UK accounting practice owners" } });
+  });
+});
+
+describe("rate limits", () => {
+  it("reads how long a 429 says to wait", () => {
+    const now = Date.parse("2026-10-20T21:00:00Z");
+    expect(retryAfterSeconds("120", null, now)).toBe(120);
+    expect(retryAfterSeconds("Tue, 20 Oct 2026 21:05:00 GMT", null, now)).toBe(300);
+    expect(retryAfterSeconds(null, { error: "Rate limit exceeded", retry_after: 42 }, now)).toBe(42);
+    expect(retryAfterSeconds(null, { details: { retryAfter: "60" } }, now)).toBe(60);
+    expect(retryAfterSeconds(null, { error: "Rate limit exceeded" }, now)).toBeUndefined();
+    expect(retryAfterSeconds("soon", null, now)).toBeUndefined();
+  });
+
+  it("marks a 429 as rate limited, with the wait and a message that says what happened", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+            status: 429,
+            headers: { "retry-after": "600" },
+          }),
+      ),
+    );
+    const err = await listComments("key", "urn:li:activity:7516792741000007680", null).catch((error) => error);
+    expect(err).toBeInstanceOf(LeadSharkError);
+    expect(err).toMatchObject({ status: 429, isRateLimited: true, isAuthError: false, retryAfterSeconds: 600 });
+    expect(err.message).toBe(
+      "LeadShark's rate limit is used up for this key (it allows 250 requests an hour). Try again in 10 min",
+    );
+
+    mockFetch([{ error: "Rate limit exceeded" }], 429);
+    const unsaid = await listComments("key", "urn:li:activity:7516792741000007680", null).catch((error) => error);
+    expect(unsaid).toMatchObject({ isRateLimited: true, retryAfterSeconds: undefined });
+    expect(unsaid.message).toContain("Try again in a few minutes");
   });
 });

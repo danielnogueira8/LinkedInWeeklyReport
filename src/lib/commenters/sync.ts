@@ -1,7 +1,15 @@
 import { and, desc, eq, gte, sql, type SQL } from "drizzle-orm";
 import { scopedComments, viewStart, type CommentersView } from "@/lib/commenters/list";
 import { decrypt } from "@/lib/crypto";
-import { commentPosts, db, icpScores, postComments, type ClientWithProfiles, type Profile } from "@/lib/db";
+import {
+  commentPosts,
+  db,
+  icpScores,
+  leadsharkCalls,
+  postComments,
+  type ClientWithProfiles,
+  type Profile,
+} from "@/lib/db";
 import {
   ICP_BATCH_SIZE,
   isOwnPost,
@@ -16,8 +24,74 @@ import { excerptOf } from "@/lib/report/build";
 // Every read goes through the creator's own LinkedIn account, so stay well under LeadShark's
 // 100 requests a minute: a burst of reads is what LinkedIn notices.
 const PACE_MS = 1500;
+// LeadShark allows each key 250 requests an hour (and 6,000 a day). The sync spends at most
+// 200 of them in any hour, leaving the rest for reports and photos, then pauses.
+const HOURLY_BUDGET = 200;
+const HOUR_MS = 60 * 60 * 1000;
+// A paused sync waits until this many calls are free again, so each round after a pause gets
+// real work done instead of re-listing posts for a call or two.
+const RESUME_WITH = 100;
+// How long to pause on a 429 that doesn't say (another tool may be using the same key).
+const RATE_LIMITED_WAIT_MS = 15 * 60 * 1000;
 // An ICP batch can take up to 90s; don't start one this close to the deadline.
 const SCORING_MARGIN_MS = 60_000;
+
+/** Stops a round when a key is out of calls for now: the sync carries on after `until`. */
+class Paused extends Error {
+  constructor(readonly until: Date) {
+    super(`Paused until ${until.toISOString()}`);
+  }
+}
+
+/** How many calls each key made in the last hour. */
+async function callsInLastHour(profileIds: string[]) {
+  const since = new Date(Date.now() - HOUR_MS);
+  const ids = sql.join(
+    profileIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const { rows } = await db().execute(sql`
+    SELECT profile_id, count(*)::int AS used FROM leadshark_calls
+    WHERE profile_id IN (${ids}) AND at > ${since} GROUP BY profile_id`);
+  return new Map(rows.map((row) => [String(row.profile_id), Number(row.used)]));
+}
+
+/** When enough of a key's last-hour calls will be over an hour old to leave RESUME_WITH free. */
+async function resumeAt(profileId: string, used: number) {
+  const since = new Date(Date.now() - HOUR_MS);
+  // The calls are sorted oldest first; the sync can carry on once this one ages out.
+  const nth = Math.min(used, Math.max(1, used - HOURLY_BUDGET + RESUME_WITH));
+  const { rows } = await db().execute(sql`
+    SELECT at FROM leadshark_calls WHERE profile_id = ${profileId} AND at > ${since}
+    ORDER BY at OFFSET ${nth - 1} LIMIT 1`);
+  const at = rows[0]?.at;
+  return new Date((at ? new Date(at as string | Date).getTime() : Date.now()) + HOUR_MS);
+}
+
+/**
+ * Paces a round's LeadShark calls and keeps each key inside its hourly budget, logging every
+ * call. `take` throws Paused when the key has none left; `record` logs calls already made.
+ */
+function caller() {
+  let last = 0;
+  const record = async (profileId: string, calls = 1) => {
+    if (calls > 0)
+      await db()
+        .insert(leadsharkCalls)
+        .values(Array.from({ length: calls }, () => ({ profileId })));
+  };
+  const take = async (profileId: string) => {
+    const used = (await callsInLastHour([profileId])).get(profileId) ?? 0;
+    if (used >= HOURLY_BUDGET) throw new Paused(await resumeAt(profileId, used));
+    const wait = last + PACE_MS - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    last = Date.now();
+    await record(profileId);
+  };
+  return { take, record };
+}
+
+type Caller = ReturnType<typeof caller>;
 
 export type SyncProgress = {
   /** Every post in the view is read to the end and everyone in it is scored (or there's no ICP). */
@@ -33,22 +107,17 @@ export type SyncProgress = {
   syncedAt: string | null;
   /** The oldest post read for the client in any view: recent when only the last 7 days have been synced. */
   earliestPost: string | null;
+  /** Out of LeadShark calls for now: run again after this (ISO time) to carry on. */
+  pausedUntil: string | null;
 };
 
-/** Waits so calls are at least `ms` apart. */
-function pacer(ms = PACE_MS) {
-  let last = 0;
-  return async () => {
-    const wait = last + ms - Date.now();
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    last = Date.now();
-  };
-}
-
 /** Records the creator's own posts in the view, with LinkedIn's latest comment counts. */
-async function refreshPosts(profile: Profile, apiKey: string, since: Date | null) {
+async function refreshPosts(profile: Profile, apiKey: string, since: Date | null, calls: Caller) {
   const own = (post: Parameters<typeof isOwnPost>[0]) => isOwnPost(post, profile);
-  const { posts } = await listPostsSince(apiKey, since ?? new Date(0), own);
+  await calls.take(profile.id);
+  const { posts, pages } = await listPostsSince(apiKey, since ?? new Date(0), own);
+  // Listing every post can take a few pages.
+  await calls.record(profile.id, pages - 1);
   const rows = posts.flatMap((post) =>
     own(post) && post.postedAt && (!since || post.postedAt >= since)
       ? [
@@ -100,13 +169,7 @@ async function saveComments(profileId: string, postId: string, comments: PostCom
  * post first, until the deadline. A changed post is read again from the start: comments
  * don't come in date order, so new ones aren't only at the end. True when it finished.
  */
-async function readComments(
-  profile: Profile,
-  apiKey: string,
-  since: Date | null,
-  deadline: number,
-  pace: () => Promise<void>,
-) {
+async function readComments(profile: Profile, apiKey: string, since: Date | null, deadline: number, calls: Caller) {
   const queue = await db()
     .select()
     .from(commentPosts)
@@ -129,7 +192,7 @@ async function readComments(
     }
     do {
       if (Date.now() >= deadline) return false;
-      await pace();
+      await calls.take(profile.id);
       let page: { comments: PostComment[]; next: string | null };
       try {
         page = await listComments(apiKey, post.postId, cursor);
@@ -162,15 +225,14 @@ function unscored(client: ClientWithProfiles, since: Date | null, icp: string): 
 }
 
 /** Scores everyone in the view against the client's ICP, 100 at a time, until the deadline. True when done. */
-async function scorePeople(
-  client: ClientWithProfiles,
-  since: Date | null,
-  deadline: number,
-  pace: () => Promise<void>,
-) {
+async function scorePeople(client: ClientWithProfiles, since: Date | null, deadline: number, calls: Caller) {
   const icp = client.icp?.trim();
   if (!icp) return true;
-  const apiKey = decrypt(client.profiles[0].apiKeyEncrypted);
+  // Score with whichever creator's key has the most of its hour left.
+  const spent = await callsInLastHour(client.profiles.map((profile) => profile.id));
+  const used = (profile: Profile) => spent.get(profile.id) ?? 0;
+  const scorer = [...client.profiles].sort((a, b) => used(a) - used(b))[0];
+  const apiKey = decrypt(scorer.apiKeyEncrypted);
   while (Date.now() + SCORING_MARGIN_MS < deadline) {
     const { rows } = await db().execute(sql`${unscored(client, since, icp)} LIMIT ${ICP_BATCH_SIZE}`);
     const batch = rows.map((row) => ({
@@ -179,7 +241,7 @@ async function scorePeople(
       headline: String(row.headline ?? ""),
     }));
     if (batch.length === 0) return true;
-    await pace();
+    await calls.take(scorer.id);
     const scores = new Map((await scoreIcp(apiKey, batch, icp)).map((score) => [score.id.toLowerCase(), score]));
     const scoredAt = new Date();
     await db()
@@ -250,12 +312,14 @@ export async function commentersStatus(client: ClientWithProfiles, view: Comment
     icp: icp !== null,
     syncedAt: row.synced_at ? new Date(row.synced_at as string | Date).toISOString() : null,
     earliestPost: row.earliest_post ? new Date(row.earliest_post as string | Date).toISOString() : null,
+    pausedUntil: null,
   };
 }
 
 /**
  * Pulls the comments on the creators' posts in the view and scores the people who wrote them,
- * until `deadline` (ms). Run it again to carry on: everything read so far is kept.
+ * until `deadline` (ms) or a key runs out of calls for the hour. Run it again to carry on
+ * (after `pausedUntil`, when set): everything read so far is kept.
  */
 export async function syncCommenters(
   client: ClientWithProfiles,
@@ -263,21 +327,34 @@ export async function syncCommenters(
   deadline: number,
 ): Promise<SyncProgress> {
   const since = viewStart(view);
-  const pace = pacer();
-  let finished = true;
-  for (const profile of client.profiles) {
-    if (Date.now() >= deadline) {
-      finished = false;
-      break;
+  const calls = caller();
+  await db().execute(sql`DELETE FROM leadshark_calls WHERE at < now() - interval '1 day'`);
+
+  let finished = false;
+  let pausedUntil: Date | null = null;
+  try {
+    finished = true;
+    for (const profile of client.profiles) {
+      const apiKey = decrypt(profile.apiKeyEncrypted);
+      if (Date.now() >= deadline) finished = false;
+      else await refreshPosts(profile, apiKey, since, calls);
+      if (!finished || !(await readComments(profile, apiKey, since, deadline, calls))) {
+        finished = false;
+        break;
+      }
     }
-    const apiKey = decrypt(profile.apiKeyEncrypted);
-    await pace();
-    await refreshPosts(profile, apiKey, since);
-    if (!(await readComments(profile, apiKey, since, deadline, pace))) {
-      finished = false;
-      break;
-    }
+    if (finished) finished = await scorePeople(client, since, deadline, calls);
+  } catch (err) {
+    finished = false;
+    if (err instanceof Paused) pausedUntil = err.until;
+    else if (err instanceof LeadSharkError && err.isRateLimited) {
+      const wait = err.retryAfterSeconds !== undefined ? err.retryAfterSeconds * 1000 : RATE_LIMITED_WAIT_MS;
+      pausedUntil = new Date(Date.now() + wait);
+    } else throw err;
   }
-  if (finished) finished = await scorePeople(client, since, deadline, pace);
-  return { ...(await commentersStatus(client, view)), done: finished };
+  return {
+    ...(await commentersStatus(client, view)),
+    done: finished,
+    pausedUntil: pausedUntil?.toISOString() ?? null,
+  };
 }
